@@ -1,6 +1,6 @@
 use crate::core::mem::{MemoryError, MemoryRegion, get_memory_regions, read_memory_address};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ValueType {
     U64,
     I64,
@@ -31,6 +31,26 @@ pub struct ScanResult {
     pub address: u64,
     pub value_type: ValueType,
     pub value: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ScanError {
+    InvalidValue,
+    EmptyValue,
+    InvalidAddress,
+    AddressMismatch,
+    Memory(MemoryError),
+}
+impl std::fmt::Display for ScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidValue => write!(f, "Invalid scan value provided"),
+            Self::EmptyValue => write!(f, "Value is reqeuired to be set before scan"),
+            Self::InvalidAddress => write!(f, "Invalid address hex"),
+            Self::AddressMismatch => write!(f, "Start address should be smaller than end address"),
+            Self::Memory(e) => write!(f, "{e}"),
+        }
+    }
 }
 
 impl ScanResult {
@@ -70,6 +90,9 @@ pub struct Scan {
     pub value: Vec<u8>,
     pub value_type: ValueType,
     pub results: Vec<ScanResult>,
+    pub watchlist: Vec<ScanResult>,
+    start_address: Option<u64>,
+    end_address: Option<u64>,
     memory_regions: Vec<MemoryRegion>,
 }
 
@@ -80,16 +103,93 @@ impl Scan {
         value_type: ValueType,
         start_address: Option<u64>,
         end_address: Option<u64>,
-    ) -> Result<Self, MemoryError> {
-        let memory_regions = get_memory_regions(pid, start_address, end_address)?;
+    ) -> Result<Self, ScanError> {
+        let memory_regions = get_memory_regions(pid, start_address, end_address)
+            .map_err(|e| ScanError::Memory(e))?;
 
         Ok(Scan {
             pid,
             value,
+            start_address,
+            end_address,
             memory_regions,
             value_type,
             results: vec![],
+            watchlist: vec![],
         })
+    }
+
+    pub fn set_value_type(&mut self, value_type: ValueType) {
+        self.value_type = value_type;
+    }
+
+    pub fn set_value_from_str(&mut self, value_str: &str) -> Result<(), ScanError> {
+        self.value = match self.value_type {
+            ValueType::U64 => value_str
+                .parse::<u64>()
+                .map_err(|_| ScanError::InvalidValue)?
+                .to_le_bytes()
+                .to_vec(),
+            ValueType::I64 => value_str
+                .parse::<i64>()
+                .map_err(|_| ScanError::InvalidValue)?
+                .to_le_bytes()
+                .to_vec(),
+            ValueType::U32 => value_str
+                .parse::<u32>()
+                .map_err(|_| ScanError::InvalidValue)?
+                .to_le_bytes()
+                .to_vec(),
+            ValueType::I32 => value_str
+                .parse::<i32>()
+                .map_err(|_| ScanError::InvalidValue)?
+                .to_le_bytes()
+                .to_vec(),
+        };
+
+        Ok(())
+    }
+
+    pub fn set_start_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
+        if addr_hex.is_empty() {
+            self.start_address = None;
+        } else {
+            let parsed_addr = u64::from_str_radix(addr_hex.trim_start_matches("0x"), 16)
+                .map_err(|_| ScanError::InvalidAddress)?;
+
+            if let Some(end_addr) = self.end_address {
+                if parsed_addr > end_addr {
+                    return Err(ScanError::AddressMismatch);
+                }
+            }
+            self.start_address = Some(parsed_addr);
+        }
+
+        self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
+            .map_err(|e| ScanError::Memory(e))?;
+
+        Ok(())
+    }
+    pub fn set_end_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
+        if addr_hex.is_empty() {
+            self.start_address = None;
+        } else {
+            let parsed_addr = u64::from_str_radix(addr_hex.trim_start_matches("0x"), 16)
+                .map_err(|_| ScanError::InvalidAddress)?;
+
+            if let Some(start) = self.start_address {
+                if parsed_addr < start {
+                    return Err(ScanError::AddressMismatch);
+                }
+            }
+
+            self.end_address = Some(parsed_addr);
+        }
+
+        self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
+            .map_err(|e| ScanError::Memory(e))?;
+
+        Ok(())
     }
 
     fn scan_region(&self, region: &MemoryRegion) -> Result<Vec<ScanResult>, MemoryError> {
@@ -130,11 +230,20 @@ impl Scan {
         Ok(results)
     }
 
-    pub fn init(&mut self) -> Result<&Vec<ScanResult>, MemoryError> {
+    fn check_value(&self) -> Result<(), ScanError> {
+        if self.value.is_empty() {
+            return Err(ScanError::EmptyValue);
+        }
+
+        Ok(())
+    }
+
+    pub fn init(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
+        self.check_value()?;
         let mut results: Vec<ScanResult> = Vec::new();
 
         for region in &self.memory_regions {
-            results.extend(self.scan_region(region)?);
+            results.extend(self.scan_region(region).map_err(|e| ScanError::Memory(e))?);
         }
 
         self.results = results;
@@ -142,7 +251,7 @@ impl Scan {
         Ok(&self.results)
     }
 
-    pub fn refresh(&mut self) -> Result<&Vec<ScanResult>, MemoryError> {
+    pub fn refresh(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         for result in &mut self.results {
             match read_memory_address(
                 self.pid,
@@ -150,7 +259,7 @@ impl Scan {
                 result.value_type.get_size() as usize,
             ) {
                 Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(e),
+                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
                     _ => {}
                 },
                 Ok(val) => result.value = val,

@@ -7,7 +7,7 @@ use std::{
 use crate::core::{
     self,
     proc::{ProcInfo, get_list},
-    scan::{Scan, ValueType},
+    scan::{Scan, ScanError, ValueType},
 };
 use crate::tui::utils::cursor;
 
@@ -203,7 +203,7 @@ impl App {
         self.scan_watchlist_vertical_scroll_state =
             self.scan_watchlist_vertical_scroll_state.position(0);
         self.select_widget(ScanViewWidget::ValueInput);
-        self.intert_mode_for(SelectedInput::ScanValue);
+        self.insert_mode_for(SelectedInput::ScanValue);
         cursor::reset_cursor(self);
         self.go_to(CurrentScreen::Scan);
     }
@@ -222,12 +222,24 @@ impl App {
             }
             Some(screen) => match screen {
                 CurrentScreen::ProcessList => {
+                    self.proc_filter_input = String::new();
                     self.show_process_list();
                 }
                 _ => {
                     self.current_screen = screen;
                 }
             },
+        }
+    }
+
+    fn enable_auto_input(&mut self) {
+        match self.scan_view_selected_widget {
+            ScanViewWidget::ValueInput => self.insert_mode_for(SelectedInput::ScanValue),
+            ScanViewWidget::StartAddressInput => self.insert_mode_for(SelectedInput::StartAddress),
+            ScanViewWidget::EndAddressInput => self.insert_mode_for(SelectedInput::EndAddress),
+            _ => {
+                self.input_mode = InputMode::Normal;
+            }
         }
     }
 
@@ -238,11 +250,20 @@ impl App {
             .iter()
             .position(|x| x == &widget)
             .unwrap();
+        self.enable_auto_input();
     }
 
-    pub fn intert_mode_for(&mut self, selected_input: SelectedInput) {
+    pub fn insert_mode_for(&mut self, selected_input: SelectedInput) {
         cursor::reset_cursor(self);
         self.input_mode = InputMode::Insert;
+        let input_len = match selected_input {
+            SelectedInput::ProcessFilter => self.proc_filter_input.len(),
+            SelectedInput::ScanValue => self.value_input.len(),
+            SelectedInput::StartAddress => self.start_address_input.len(),
+            SelectedInput::EndAddress => self.end_address_input.len(),
+            SelectedInput::ResultValue => self.result_value_input.len(),
+        };
+        self.character_index = input_len;
         self.selected_input = Some(selected_input);
     }
 
@@ -251,6 +272,7 @@ impl App {
             (self.scan_view_selected_widget_index + 1) % self.scan_view_widgets.len();
         self.scan_view_selected_widget =
             self.scan_view_widgets[self.scan_view_selected_widget_index].clone();
+        self.enable_auto_input();
     }
 
     pub fn prev_widget(&mut self) {
@@ -259,12 +281,13 @@ impl App {
             (self.scan_view_selected_widget_index + len - 1) % len;
         self.scan_view_selected_widget =
             self.scan_view_widgets[self.scan_view_selected_widget_index].clone();
+        self.enable_auto_input();
     }
 
     fn handle_process_list_event(&mut self, key_code: KeyCode) {
         match key_code {
             KeyCode::Char('f') => {
-                self.intert_mode_for(SelectedInput::ProcessFilter);
+                self.insert_mode_for(SelectedInput::ProcessFilter);
             }
             KeyCode::Char('r') => {
                 self.show_process_list();
@@ -335,6 +358,9 @@ impl App {
 
     fn handle_scan_list_event(&mut self, key_code: KeyCode) {
         match key_code {
+            KeyCode::Esc => {
+                self.go_back();
+            }
             KeyCode::Tab => {
                 self.next_widget();
             }
@@ -342,16 +368,213 @@ impl App {
                 self.prev_widget();
             }
             KeyCode::Enter => match self.scan_view_selected_widget {
-                ScanViewWidget::ValueInput => self.intert_mode_for(SelectedInput::ScanValue),
+                ScanViewWidget::ValueInput => self.insert_mode_for(SelectedInput::ScanValue),
                 ScanViewWidget::StartAddressInput => {
-                    self.intert_mode_for(SelectedInput::StartAddress)
+                    self.insert_mode_for(SelectedInput::StartAddress)
                 }
-                ScanViewWidget::EndAddressInput => self.intert_mode_for(SelectedInput::EndAddress),
+                ScanViewWidget::EndAddressInput => self.insert_mode_for(SelectedInput::EndAddress),
                 _ => {}
             },
             _ => {}
         }
+
+        match self.scan_view_selected_widget {
+            ScanViewWidget::ValueTypeSelect => match key_code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if let Some(selected) = self.value_type_state.selected() {
+                        let next = if selected < self.value_types.len() - 1 {
+                            selected + 1
+                        } else {
+                            0
+                        };
+
+                        self.value_type_state.select(Some(next));
+
+                        if let Some(scan) = &mut self.scan {
+                            scan.set_value_type(self.value_types[next]);
+                        }
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if let Some(selected) = self.value_type_state.selected() {
+                        let next = if selected > 0 {
+                            selected - 1
+                        } else {
+                            self.value_types.len() - 1
+                        };
+
+                        if let Some(scan) = &mut self.scan {
+                            scan.set_value_type(self.value_types[next]);
+                        }
+                        self.value_type_state.select(Some(next));
+                    }
+                }
+                _ => {}
+            },
+            ScanViewWidget::ScanResults | ScanViewWidget::WatchList => match key_code {
+                KeyCode::Char('s') => {
+                    if let Some(scan) = &mut self.scan {
+                        self.app_message =
+                            AppMessage::new("Starting new scan...", AppMessageType::Info);
+                        if let Err(e) = scan.init() {
+                            self.app_message = AppMessage::new(
+                                &format!("Error while scanning: {e}"),
+                                AppMessageType::Error,
+                            );
+                        } else if scan.results.len() > 0 {
+                            self.scan_results_list_state.select(Some(0));
+                            self.app_message = AppMessage::default();
+                        } else {
+                            self.app_message = AppMessage::default();
+                        }
+                        self.scan_results_vertical_scroll_state = self
+                            .scan_results_vertical_scroll_state
+                            .content_length(scan.results.len());
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if let Some(scan) = &mut self.scan {
+                        self.app_message =
+                            AppMessage::new("Refreshing current scan...", AppMessageType::Info);
+                        if let Err(e) = scan.refresh() {
+                            self.app_message = AppMessage::new(
+                                &format!("Error while scanning: {e}"),
+                                AppMessageType::Error,
+                            );
+                        } else {
+                            self.app_message = AppMessage::default();
+                        }
+                    }
+                }
+                KeyCode::Char('n') => {
+                    if let Some(scan) = &mut self.scan {
+                        self.app_message =
+                            AppMessage::new("Starting next scan...", AppMessageType::Info);
+                        if let Err(e) = scan.next_scan() {
+                            self.app_message = AppMessage::new(
+                                &format!("Error while scanning: {e}"),
+                                AppMessageType::Error,
+                            );
+                        } else if scan.results.len() > 0 {
+                            self.scan_results_list_state.select(Some(0));
+                            self.app_message = AppMessage::default();
+                        } else {
+                            self.app_message = AppMessage::default();
+                        }
+                        self.scan_results_vertical_scroll_state = self
+                            .scan_results_vertical_scroll_state
+                            .content_length(scan.results.len());
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+
+        if self.scan_view_selected_widget == ScanViewWidget::ScanResults {
+            match key_code {
+                KeyCode::Char('w') => {
+                    if let Some(scan) = &mut self.scan {
+                        self.app_message =
+                            AppMessage::new("Address added to watchlist", AppMessageType::Info);
+                        self.scan_watchlist_vertical_scroll_state = self
+                            .scan_watchlist_vertical_scroll_state
+                            .content_length(scan.watchlist.len());
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.scan.is_none() {
+                        return;
+                    }
+
+                    let results = &self.scan.as_ref().unwrap().results;
+
+                    if let Some(selected) = self.scan_results_list_state.selected() {
+                        let next = if selected < results.len() - 1 {
+                            selected + 1
+                        } else {
+                            0
+                        };
+
+                        self.scan_results_list_state.select(Some(next));
+                        self.scan_results_vertical_scroll_state =
+                            self.scan_results_vertical_scroll_state.position(next);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.scan.is_none() {
+                        return;
+                    }
+
+                    let results = &self.scan.as_ref().unwrap().results;
+                    if let Some(selected) = self.scan_results_list_state.selected() {
+                        let next = if selected > 0 {
+                            selected - 1
+                        } else {
+                            results.len() - 1
+                        };
+
+                        self.scan_results_vertical_scroll_state =
+                            self.scan_results_vertical_scroll_state.position(next);
+                    }
+                }
+                _ => {}
+            };
+        }
+
+        if self.scan_view_selected_widget == ScanViewWidget::WatchList {
+            match key_code {
+                KeyCode::Char('d') => {
+                    if let Some(scan) = &mut self.scan {
+                        self.app_message =
+                            AppMessage::new("Address removed from watchlist", AppMessageType::Info);
+                        self.scan_watchlist_vertical_scroll_state = self
+                            .scan_watchlist_vertical_scroll_state
+                            .content_length(scan.watchlist.len());
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.scan.is_none() {
+                        return;
+                    }
+
+                    let results = &self.scan.as_ref().unwrap().watchlist;
+
+                    if let Some(selected) = self.scan_watchlist_list_state.selected() {
+                        let next = if selected < results.len() - 1 {
+                            selected + 1
+                        } else {
+                            0
+                        };
+
+                        self.scan_watchlist_list_state.select(Some(next));
+                        self.scan_watchlist_vertical_scroll_state =
+                            self.scan_watchlist_vertical_scroll_state.position(next);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.scan.is_none() {
+                        return;
+                    }
+
+                    let results = &self.scan.as_ref().unwrap().watchlist;
+                    if let Some(selected) = self.scan_watchlist_list_state.selected() {
+                        let next = if selected > 0 {
+                            selected - 1
+                        } else {
+                            results.len() - 1
+                        };
+
+                        self.scan_watchlist_list_state.select(Some(next));
+                        self.scan_watchlist_vertical_scroll_state =
+                            self.scan_watchlist_vertical_scroll_state.position(next);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
+
     fn handle_normal_mode_event(&mut self, key: KeyEvent) {
         if self.current_screen != CurrentScreen::Exiting && key.code == KeyCode::Char('q') {
             self.go_to(CurrentScreen::Exiting);
@@ -378,28 +601,114 @@ impl App {
         }
     }
 
+    fn accept_input(&mut self) {
+        if self.scan.is_none() {
+            return;
+        }
+        let scan = self.scan.as_mut().unwrap();
+        if let Some(selected_input) = &self.selected_input {
+            match selected_input {
+                SelectedInput::ScanValue => {
+                    if !self.value_input.is_empty()
+                        && scan.set_value_from_str(&self.value_input).is_err()
+                    {
+                        self.app_message = AppMessage::new(
+                            &format!(
+                                "Invalid value: {:.10} for type: {}",
+                                self.value_input,
+                                scan.value_type.to_string(),
+                            ),
+                            AppMessageType::Error,
+                        );
+                    } else {
+                        self.app_message = AppMessage::default();
+                    }
+                }
+                SelectedInput::StartAddress => {
+                    if let Err(e) = scan.set_start_address(&self.start_address_input) {
+                        match e {
+                            ScanError::InvalidAddress => {
+                                self.app_message = AppMessage::new(
+                                    &format!("Invalid hex value: {:.16}", self.start_address_input),
+                                    AppMessageType::Error,
+                                );
+                            }
+                            ScanError::AddressMismatch => {
+                                self.app_message = AppMessage::new(
+                                    "Start address should be smaller than end address",
+                                    AppMessageType::Error,
+                                );
+                            }
+                            ScanError::Memory(e) => {
+                                self.app_message = AppMessage::new(
+                                    &format!("Error getting memory regions: {e}"),
+                                    AppMessageType::Error,
+                                );
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        self.app_message = AppMessage::default();
+                    }
+                }
+                SelectedInput::EndAddress => {
+                    if let Err(e) = scan.set_end_address(&self.end_address_input) {
+                        match e {
+                            ScanError::InvalidAddress => {
+                                self.app_message = AppMessage::new(
+                                    &format!("Invalid hex value: {:.16}", self.end_address_input),
+                                    AppMessageType::Error,
+                                );
+                            }
+                            ScanError::AddressMismatch => {
+                                self.app_message = AppMessage::new(
+                                    "End address should be bigger than start address",
+                                    AppMessageType::Error,
+                                );
+                            }
+                            ScanError::Memory(e) => {
+                                self.app_message = AppMessage::new(
+                                    &format!("Error getting memory regions: {e}"),
+                                    AppMessageType::Error,
+                                );
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        self.app_message = AppMessage::default();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn handle_insert_mode_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
 
-        if self.selected_input.is_none()
-            || key.code == KeyCode::Esc
-            || key.code == KeyCode::Enter
-            || key.code == KeyCode::Tab
-        {
+        if self.selected_input.is_none() || key.code == KeyCode::Esc || key.code == KeyCode::Enter {
+            self.accept_input();
             self.input_mode = InputMode::Normal;
             return;
         }
 
-        let selected_input = self.selected_input.as_ref().unwrap();
-        let current_input = match selected_input {
-            SelectedInput::ProcessFilter => &mut self.proc_filter_input,
-            SelectedInput::ScanValue => &mut self.value_input,
-            SelectedInput::StartAddress => &mut self.start_address_input,
-            SelectedInput::EndAddress => &mut self.end_address_input,
-            SelectedInput::ResultValue => &mut self.result_value_input,
-        };
+        let current_input;
+        match &self.selected_input {
+            Some(selected_input) => {
+                current_input = match selected_input {
+                    SelectedInput::ProcessFilter => &mut self.proc_filter_input,
+                    SelectedInput::ScanValue => &mut self.value_input,
+                    SelectedInput::StartAddress => &mut self.start_address_input,
+                    SelectedInput::EndAddress => &mut self.end_address_input,
+                    SelectedInput::ResultValue => &mut self.result_value_input,
+                };
+            }
+            None => {
+                return;
+            }
+        }
 
         match key.code {
             KeyCode::Char(to_insert) => {
@@ -412,17 +721,36 @@ impl App {
             KeyCode::Left => cursor::move_cursor_left(current_input, &mut self.character_index),
             KeyCode::Right => cursor::move_cursor_right(current_input, &mut self.character_index),
 
+            KeyCode::Tab => {
+                if self.current_screen != CurrentScreen::Scan {
+                    self.input_mode = InputMode::Normal;
+                    return;
+                }
+                self.accept_input();
+                self.next_widget();
+            }
+            KeyCode::BackTab => {
+                if self.current_screen != CurrentScreen::Scan {
+                    self.input_mode = InputMode::Normal;
+                    return;
+                }
+                self.accept_input();
+                self.prev_widget();
+            }
             _ => {}
         }
 
-        match selected_input {
-            SelectedInput::ProcessFilter => match key.code {
-                KeyCode::Char(_) | KeyCode::Backspace => {
-                    self.show_process_list();
-                }
+        match &self.selected_input {
+            Some(selected_input) => match selected_input {
+                SelectedInput::ProcessFilter => match key.code {
+                    KeyCode::Char(_) | KeyCode::Backspace => {
+                        self.show_process_list();
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
-            _ => {}
+            None => {}
         }
     }
 

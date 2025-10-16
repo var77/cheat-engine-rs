@@ -1,7 +1,7 @@
 use process_memory::*;
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MemoryError {
     NoPermissionError(i32),
     MemReadError(i32),

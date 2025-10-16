@@ -14,16 +14,6 @@ use crate::{
     tui::app::{App, AppMessageType, CurrentScreen, InputMode, ScanViewWidget, SelectedInput},
 };
 
-fn render_title(frame: &mut Frame, layout_chunk: Rect, title_text: &str) {
-    let title_block = Block::default()
-        .title(Line::from(title_text).centered())
-        .border_style(Style::default().fg(Color::Green))
-        .borders(Borders::NONE)
-        .style(Style::default());
-
-    frame.render_widget(title_block, layout_chunk);
-}
-
 pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -114,10 +104,15 @@ fn get_active_widget_style(app: &App, widget: ScanViewWidget) -> Style {
 }
 
 fn get_message_style(app: &App) -> Style {
-    match app.app_message.msg_type {
+    let mut style = match app.app_message.msg_type {
         AppMessageType::Info => Style::default(),
-        AppMessageType::Error => Style::default().fg(Color::Red),
+        AppMessageType::Error => Style::default().bg(Color::Red),
+    };
+
+    if app.scan_view_selected_widget == ScanViewWidget::AppMessage {
+        style = style.fg(Color::Yellow);
     }
+    style
 }
 
 pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
@@ -268,7 +263,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             app,
             ScanViewWidget::StartAddressInput,
         ))
-        .block(Block::bordered().title("Start Address (optional)"));
+        .block(Block::bordered().title("Start Address - hex (optional)"));
     frame.render_widget(start_address_input, options_view_chunks[2]);
 
     let end_address_input = Paragraph::new(app.end_address_input.as_str())
@@ -276,12 +271,11 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             app,
             ScanViewWidget::EndAddressInput,
         ))
-        .block(Block::bordered().title("End Address (optional)"));
+        .block(Block::bordered().title("End Address - hex (optional)"));
     frame.render_widget(end_address_input, options_view_chunks[3]);
 
     let msg_box = Paragraph::new(app.app_message.msg.as_str())
         .style(get_message_style(app))
-        .style(get_active_widget_style(app, ScanViewWidget::AppMessage))
         .block(Block::bordered().title("App Message"));
     frame.render_widget(msg_box, options_view_chunks[4]);
 
