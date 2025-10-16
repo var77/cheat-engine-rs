@@ -1,4 +1,4 @@
-use crate::mem::{MemoryError, MemoryRegion, get_memory_regions, read_memory_address};
+use crate::core::mem::{MemoryError, MemoryRegion, get_memory_regions, read_memory_address};
 
 #[derive(Debug, Clone)]
 pub enum ValueType {
@@ -15,13 +15,22 @@ impl ValueType {
             ValueType::U32 | ValueType::I32 => 4,
         }
     }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            ValueType::U64 => format!("u64 ({}B)", self.get_size()),
+            ValueType::I64 => format!("i64 ({}B)", self.get_size()),
+            ValueType::U32 => format!("u32 ({}B)", self.get_size()),
+            ValueType::I32 => format!("i32 ({}B)", self.get_size()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ScanResult {
-    address: u64,
-    value_type: ValueType,
-    value: Vec<u8>,
+    pub address: u64,
+    pub value_type: ValueType,
+    pub value: Vec<u8>,
 }
 
 impl ScanResult {
@@ -30,6 +39,27 @@ impl ScanResult {
             address,
             value_type,
             value,
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        match self.value_type {
+            ValueType::U64 => format!(
+                "{}",
+                u64::from_le_bytes(self.value.as_slice().try_into().unwrap())
+            ),
+            ValueType::I64 => format!(
+                "{}",
+                i64::from_le_bytes(self.value.as_slice().try_into().unwrap())
+            ),
+            ValueType::U32 => format!(
+                "{}",
+                u32::from_le_bytes(self.value.as_slice().try_into().unwrap())
+            ),
+            ValueType::I32 => format!(
+                "{}",
+                i32::from_le_bytes(self.value.as_slice().try_into().unwrap())
+            ),
         }
     }
 }
@@ -156,7 +186,7 @@ impl Scan {
 }
 
 mod test {
-    use crate::mem::write_memory_address;
+    use crate::core::mem::write_memory_address;
 
     #[test]
     #[ignore = "requires root"]
@@ -172,7 +202,7 @@ mod test {
         match proc {
             Err(e) => assert!(false, "Error running simple program: {e}"),
             Ok(child) => {
-                let proc = crate::utils::ChildGuard(child);
+                let proc = crate::core::utils::ChildGuard(child);
 
                 let scan = Scan::new(
                     proc.0.id(),
@@ -202,7 +232,7 @@ mod test {
             .spawn()
             .unwrap();
 
-        let mut proc = crate::utils::ChildGuard(proc);
+        let mut proc = crate::core::utils::ChildGuard(proc);
         let stdout = proc.0.stdout.take().expect("child had no stdout");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -246,7 +276,7 @@ mod test {
             .spawn()
             .unwrap();
 
-        let mut proc = crate::utils::ChildGuard(proc);
+        let mut proc = crate::core::utils::ChildGuard(proc);
         let stdout = proc.0.stdout.take().expect("child had no stdout");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -301,7 +331,7 @@ mod test {
             .spawn()
             .unwrap();
 
-        let mut proc = crate::utils::ChildGuard(proc);
+        let mut proc = crate::core::utils::ChildGuard(proc);
         let stdout = proc.0.stdout.take().expect("child had no stdout");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();

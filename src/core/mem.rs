@@ -1,10 +1,23 @@
 use process_memory::*;
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub enum MemoryError {
     NoPermissionError(i32),
     MemReadError(i32),
     ProcessAttachError(i32),
+}
+
+impl Display for MemoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPermissionError(code) => write!(f, "Permission Denied: OS Error ({code})"),
+            Self::MemReadError(code) => write!(f, "Could not read memory: OS Error ({code})"),
+            Self::ProcessAttachError(code) => {
+                write!(f, "Could not attach to process: OS Error ({code})")
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -185,7 +198,7 @@ mod test {
         match proc {
             Err(e) => assert!(false, "Error running simple program: {e}"),
             Ok(child) => {
-                let proc = crate::utils::ChildGuard(child);
+                let proc = crate::core::utils::ChildGuard(child);
                 let regions = get_memory_regions(proc.0.id(), None, None);
                 assert!(regions.is_ok());
                 let regions = regions.unwrap();
@@ -208,7 +221,7 @@ mod test {
         match proc {
             Err(e) => assert!(false, "Error running simple program: {e}"),
             Ok(child) => {
-                let proc = crate::utils::ChildGuard(child);
+                let proc = crate::core::utils::ChildGuard(child);
                 let regions = get_memory_regions(proc.0.id(), Some(u64::MAX), None);
                 assert!(regions.is_ok());
                 let regions = regions.unwrap();
@@ -235,7 +248,7 @@ mod test {
             .spawn()
             .unwrap();
 
-        let mut proc = crate::utils::ChildGuard(proc);
+        let mut proc = crate::core::utils::ChildGuard(proc);
         let stdout = proc.0.stdout.take().expect("child had no stdout");
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -264,7 +277,7 @@ mod test {
             .spawn()
             .unwrap();
 
-        let mut proc = crate::utils::ChildGuard(proc);
+        let mut proc = crate::core::utils::ChildGuard(proc);
         let mut stdin = proc.0.stdin.take().expect("child has no stdin");
         let stdout = proc.0.stdout.take().expect("child had no stdout");
         let mut reader = BufReader::new(stdout);
