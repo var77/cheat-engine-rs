@@ -1,3 +1,10 @@
+use std::time::{Duration, Instant};
+
+use ratatui::{
+    crossterm::event::KeyCode,
+    widgets::{ListState, ScrollbarState},
+};
+
 pub mod cursor {
     pub fn move_cursor_left(input: &String, char_index: &mut usize) {
         let cursor_moved_left = char_index.saturating_sub(1);
@@ -51,5 +58,68 @@ pub mod cursor {
 
     pub fn reset_cursor(app: &mut crate::tui::App) {
         app.character_index = 0;
+    }
+}
+
+pub fn handle_list_events(
+    key_code: KeyCode,
+    list_state: &mut ListState,
+    list_size: usize,
+    scroll_state: Option<&mut ScrollbarState>,
+    last_g_press_time: &mut Option<Instant>,
+) {
+    match key_code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(selected) = list_state.selected() {
+                let next = if selected < list_size - 1 {
+                    selected + 1
+                } else {
+                    0
+                };
+                if scroll_state.is_some() {
+                    let scroll_state = scroll_state.unwrap();
+                    *scroll_state = scroll_state.position(next);
+                }
+                list_state.select(Some(next));
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(selected) = list_state.selected() {
+                let next = if selected > 0 {
+                    selected - 1
+                } else {
+                    list_size - 1
+                };
+                list_state.select(Some(next));
+                if scroll_state.is_some() {
+                    let scroll_state = scroll_state.unwrap();
+                    *scroll_state = scroll_state.position(next);
+                }
+            }
+        }
+        KeyCode::Char('G') => {
+            let next = list_size - 1;
+            if scroll_state.is_some() {
+                let scroll_state = scroll_state.unwrap();
+                *scroll_state = scroll_state.position(next);
+            }
+            list_state.select(Some(next));
+        }
+        KeyCode::Char('g') => {
+            if let Some(t) = last_g_press_time {
+                if t.elapsed() < Duration::from_millis(500) {
+                    *last_g_press_time = None;
+                    let next = 0;
+                    if scroll_state.is_some() {
+                        let scroll_state = scroll_state.unwrap();
+                        *scroll_state = scroll_state.position(next);
+                    }
+                    list_state.select(Some(next));
+                    return;
+                }
+            }
+            *last_g_press_time = Some(Instant::now());
+        }
+        _ => {}
     }
 }

@@ -1,15 +1,17 @@
 use std::{
     error::Error,
-    ops::Index,
     time::{Duration, Instant},
 };
 
-use crate::core::{
-    self,
-    proc::{ProcInfo, get_list},
-    scan::{Scan, ScanError, ValueType},
-};
 use crate::tui::utils::cursor;
+use crate::{
+    core::{
+        self,
+        proc::{ProcInfo, get_list},
+        scan::{Scan, ScanError, ValueType},
+    },
+    tui::utils,
+};
 
 use ratatui::{
     DefaultTerminal,
@@ -72,13 +74,19 @@ impl AppMessage {
         }
     }
 }
+#[derive(Clone, PartialEq)]
+pub enum AppAction {
+    NewScan,
+    RefreshScan,
+    NextScan,
+}
 
 pub struct App {
     pub proc_filter_input: String,
     pub last_g_press_time: Option<Instant>,
     pub character_index: usize,
     pub input_mode: InputMode,
-    pub list_state: ListState,
+    pub proc_list_state: ListState,
     should_exit: bool,
     pub proc_list_vertical_scroll_state: ScrollbarState,
     pub scan_results_vertical_scroll_state: ScrollbarState,
@@ -101,6 +109,7 @@ pub struct App {
     scan_view_selected_widget_index: usize,
     pub scan_view_selected_widget: ScanViewWidget,
     pub app_message: AppMessage,
+    pub app_action: Option<AppAction>,
     pub scan_results_list_state: ListState,
     pub scan_watchlist_list_state: ListState,
 }
@@ -111,7 +120,7 @@ impl App {
             last_g_press_time: None,
             input_mode: InputMode::Normal,
             character_index: 0,
-            list_state: ListState::default(),
+            proc_list_state: ListState::default(),
             should_exit: false,
             proc_list_vertical_scroll_state: ScrollbarState::default(),
             scan_results_vertical_scroll_state: ScrollbarState::default(),
@@ -150,6 +159,7 @@ impl App {
             app_message: AppMessage::default(),
             scan_results_list_state: ListState::default(),
             scan_watchlist_list_state: ListState::default(),
+            app_action: None,
         }
     }
 
@@ -165,7 +175,7 @@ impl App {
             .proc_list_vertical_scroll_state
             .content_length(self.proc_list.len());
         if !self.proc_list.is_empty() {
-            self.list_state.select(Some(0));
+            self.proc_list_state.select(Some(0));
         }
         self.current_screen = CurrentScreen::ProcessList;
     }
@@ -285,6 +295,13 @@ impl App {
     }
 
     fn handle_process_list_event(&mut self, key_code: KeyCode) {
+        utils::handle_list_events(
+            key_code,
+            &mut self.proc_list_state,
+            self.proc_list.len(),
+            Some(&mut self.proc_list_vertical_scroll_state),
+            &mut self.last_g_press_time,
+        );
         match key_code {
             KeyCode::Char('f') => {
                 self.insert_mode_for(SelectedInput::ProcessFilter);
@@ -292,71 +309,154 @@ impl App {
             KeyCode::Char('r') => {
                 self.show_process_list();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if let Some(selected) = self.list_state.selected() {
-                    let next = if selected < self.proc_list.len() - 1 {
-                        selected + 1
-                    } else {
-                        0
-                    };
-                    self.proc_list_vertical_scroll_state =
-                        self.proc_list_vertical_scroll_state.position(next);
-                    self.list_state.select(Some(next));
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if let Some(selected) = self.list_state.selected() {
-                    let next = if selected > 0 {
-                        selected - 1
-                    } else {
-                        self.proc_list.len() - 1
-                    };
-                    self.list_state.select(Some(next));
-                    self.proc_list_vertical_scroll_state =
-                        self.proc_list_vertical_scroll_state.position(next);
-                }
-            }
-            KeyCode::Char('G') => {
-                let next = self.proc_list.len() - 1;
-                self.proc_list_vertical_scroll_state =
-                    self.proc_list_vertical_scroll_state.position(next);
-                self.list_state.select(Some(next));
-            }
-            KeyCode::Char('g') => {
-                if let Some(t) = self.last_g_press_time {
-                    if t.elapsed() < Duration::from_millis(500) {
-                        self.last_g_press_time = None;
-                        let next = 0;
-                        self.proc_list_vertical_scroll_state =
-                            self.proc_list_vertical_scroll_state.position(next);
-                        self.list_state.select(Some(next));
-                        return;
-                    }
-                }
-                self.last_g_press_time = Some(Instant::now());
-            }
             KeyCode::Enter => {
-                // select process
-                if self.list_state.selected().is_none() {
+                if self.proc_list_state.selected().is_none() {
                     return;
                 }
-
-                let selected_process = self.proc_list.get(self.list_state.selected().unwrap());
+                let selected_process = self.proc_list.get(self.proc_list_state.selected().unwrap());
 
                 if selected_process.is_none() {
                     self.show_process_list();
                     return;
                 }
-
                 // Go to scan view
                 self.selected_process = Some(selected_process.unwrap().clone());
                 self.show_scan_view();
             }
             _ => {}
+        };
+    }
+
+    fn new_scan(&mut self) {
+        match &mut self.scan {
+            None => {}
+            Some(scan) => {
+                if let Err(e) = scan.init() {
+                    self.app_message = AppMessage::new(
+                        &format!("Error while scanning: {e}"),
+                        AppMessageType::Error,
+                    );
+                } else if scan.results.len() > 0 {
+                    self.scan_results_list_state.select(Some(0));
+                    self.app_message = AppMessage::default();
+                } else {
+                    self.app_message = AppMessage::default();
+                }
+                self.scan_results_vertical_scroll_state = self
+                    .scan_results_vertical_scroll_state
+                    .content_length(scan.results.len());
+                self.scan_results_vertical_scroll_state =
+                    self.scan_results_vertical_scroll_state.position(0);
+            }
+        }
+    }
+
+    fn next_scan(&mut self) {
+        match &mut self.scan {
+            None => {}
+            Some(scan) => {
+                if let Err(e) = scan.next_scan() {
+                    self.app_message = AppMessage::new(
+                        &format!("Error while scanning: {e}"),
+                        AppMessageType::Error,
+                    );
+                } else if scan.results.len() > 0 {
+                    self.scan_results_list_state.select(Some(0));
+                    self.app_message = AppMessage::default();
+                } else {
+                    self.app_message = AppMessage::default();
+                }
+                self.scan_results_vertical_scroll_state = self
+                    .scan_results_vertical_scroll_state
+                    .content_length(scan.results.len());
+                self.scan_results_vertical_scroll_state =
+                    self.scan_results_vertical_scroll_state.position(0);
+            }
+        }
+    }
+
+    fn refresh_scan(&mut self) {
+        match &mut self.scan {
+            None => {}
+            Some(scan) => {
+                if let Err(e) = scan.refresh() {
+                    self.app_message = AppMessage::new(
+                        &format!("Error while scanning: {e}"),
+                        AppMessageType::Error,
+                    );
+                } else {
+                    self.app_message = AppMessage::default();
+                }
+            }
         }
     }
 
     fn handle_scan_list_event(&mut self, key_code: KeyCode) {
+        // Handle list events
+        if let Some(scan) = &mut self.scan {
+            match self.scan_view_selected_widget {
+                ScanViewWidget::ScanResults => {
+                    utils::handle_list_events(
+                        key_code,
+                        &mut self.scan_results_list_state,
+                        scan.results.len(),
+                        Some(&mut self.scan_results_vertical_scroll_state),
+                        &mut self.last_g_press_time,
+                    );
+                    match key_code {
+                        KeyCode::Char('w') => {
+                            self.app_message =
+                                AppMessage::new("Address added to watchlist", AppMessageType::Info);
+                            self.scan_watchlist_vertical_scroll_state = self
+                                .scan_watchlist_vertical_scroll_state
+                                .content_length(scan.watchlist.len());
+                        }
+                        _ => {}
+                    };
+                }
+                ScanViewWidget::WatchList => {
+                    utils::handle_list_events(
+                        key_code,
+                        &mut self.scan_watchlist_list_state,
+                        scan.watchlist.len(),
+                        Some(&mut self.scan_watchlist_vertical_scroll_state),
+                        &mut self.last_g_press_time,
+                    );
+                    match key_code {
+                        KeyCode::Char('d') => {
+                            self.app_message = AppMessage::new(
+                                "Address removed from watchlist",
+                                AppMessageType::Info,
+                            );
+                            self.scan_watchlist_vertical_scroll_state = self
+                                .scan_watchlist_vertical_scroll_state
+                                .content_length(scan.watchlist.len());
+                        }
+                        _ => {}
+                    }
+                }
+                ScanViewWidget::ValueTypeSelect => {
+                    utils::handle_list_events(
+                        key_code,
+                        &mut self.value_type_state,
+                        self.value_types.len(),
+                        None,
+                        &mut self.last_g_press_time,
+                    );
+                    match key_code {
+                        KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(selected) = self.value_type_state.selected() {
+                                scan.set_value_type(self.value_types[selected]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Handle navigation events
         match key_code {
             KeyCode::Esc => {
                 self.go_back();
@@ -378,200 +478,33 @@ impl App {
             _ => {}
         }
 
+        // Handle actions events
         match self.scan_view_selected_widget {
-            ScanViewWidget::ValueTypeSelect => match key_code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(selected) = self.value_type_state.selected() {
-                        let next = if selected < self.value_types.len() - 1 {
-                            selected + 1
-                        } else {
-                            0
-                        };
-
-                        self.value_type_state.select(Some(next));
-
-                        if let Some(scan) = &mut self.scan {
-                            scan.set_value_type(self.value_types[next]);
-                        }
-                    }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if let Some(selected) = self.value_type_state.selected() {
-                        let next = if selected > 0 {
-                            selected - 1
-                        } else {
-                            self.value_types.len() - 1
-                        };
-
-                        if let Some(scan) = &mut self.scan {
-                            scan.set_value_type(self.value_types[next]);
-                        }
-                        self.value_type_state.select(Some(next));
-                    }
-                }
-                _ => {}
-            },
             ScanViewWidget::ScanResults | ScanViewWidget::WatchList => match key_code {
                 KeyCode::Char('s') => {
-                    if let Some(scan) = &mut self.scan {
+                    if self.scan.is_some() {
                         self.app_message =
                             AppMessage::new("Starting new scan...", AppMessageType::Info);
-                        if let Err(e) = scan.init() {
-                            self.app_message = AppMessage::new(
-                                &format!("Error while scanning: {e}"),
-                                AppMessageType::Error,
-                            );
-                        } else if scan.results.len() > 0 {
-                            self.scan_results_list_state.select(Some(0));
-                            self.app_message = AppMessage::default();
-                        } else {
-                            self.app_message = AppMessage::default();
-                        }
-                        self.scan_results_vertical_scroll_state = self
-                            .scan_results_vertical_scroll_state
-                            .content_length(scan.results.len());
+                        self.app_action = Some(AppAction::NewScan);
                     }
                 }
                 KeyCode::Char('r') => {
-                    if let Some(scan) = &mut self.scan {
+                    if self.scan.is_some() {
                         self.app_message =
                             AppMessage::new("Refreshing current scan...", AppMessageType::Info);
-                        if let Err(e) = scan.refresh() {
-                            self.app_message = AppMessage::new(
-                                &format!("Error while scanning: {e}"),
-                                AppMessageType::Error,
-                            );
-                        } else {
-                            self.app_message = AppMessage::default();
-                        }
+                        self.app_action = Some(AppAction::RefreshScan);
                     }
                 }
                 KeyCode::Char('n') => {
-                    if let Some(scan) = &mut self.scan {
+                    if self.scan.is_some() {
                         self.app_message =
                             AppMessage::new("Starting next scan...", AppMessageType::Info);
-                        if let Err(e) = scan.next_scan() {
-                            self.app_message = AppMessage::new(
-                                &format!("Error while scanning: {e}"),
-                                AppMessageType::Error,
-                            );
-                        } else if scan.results.len() > 0 {
-                            self.scan_results_list_state.select(Some(0));
-                            self.app_message = AppMessage::default();
-                        } else {
-                            self.app_message = AppMessage::default();
-                        }
-                        self.scan_results_vertical_scroll_state = self
-                            .scan_results_vertical_scroll_state
-                            .content_length(scan.results.len());
+                        self.app_action = Some(AppAction::NextScan);
                     }
                 }
                 _ => {}
             },
             _ => {}
-        }
-
-        if self.scan_view_selected_widget == ScanViewWidget::ScanResults {
-            match key_code {
-                KeyCode::Char('w') => {
-                    if let Some(scan) = &mut self.scan {
-                        self.app_message =
-                            AppMessage::new("Address added to watchlist", AppMessageType::Info);
-                        self.scan_watchlist_vertical_scroll_state = self
-                            .scan_watchlist_vertical_scroll_state
-                            .content_length(scan.watchlist.len());
-                    }
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if self.scan.is_none() {
-                        return;
-                    }
-
-                    let results = &self.scan.as_ref().unwrap().results;
-
-                    if let Some(selected) = self.scan_results_list_state.selected() {
-                        let next = if selected < results.len() - 1 {
-                            selected + 1
-                        } else {
-                            0
-                        };
-
-                        self.scan_results_list_state.select(Some(next));
-                        self.scan_results_vertical_scroll_state =
-                            self.scan_results_vertical_scroll_state.position(next);
-                    }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if self.scan.is_none() {
-                        return;
-                    }
-
-                    let results = &self.scan.as_ref().unwrap().results;
-                    if let Some(selected) = self.scan_results_list_state.selected() {
-                        let next = if selected > 0 {
-                            selected - 1
-                        } else {
-                            results.len() - 1
-                        };
-
-                        self.scan_results_vertical_scroll_state =
-                            self.scan_results_vertical_scroll_state.position(next);
-                    }
-                }
-                _ => {}
-            };
-        }
-
-        if self.scan_view_selected_widget == ScanViewWidget::WatchList {
-            match key_code {
-                KeyCode::Char('d') => {
-                    if let Some(scan) = &mut self.scan {
-                        self.app_message =
-                            AppMessage::new("Address removed from watchlist", AppMessageType::Info);
-                        self.scan_watchlist_vertical_scroll_state = self
-                            .scan_watchlist_vertical_scroll_state
-                            .content_length(scan.watchlist.len());
-                    }
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if self.scan.is_none() {
-                        return;
-                    }
-
-                    let results = &self.scan.as_ref().unwrap().watchlist;
-
-                    if let Some(selected) = self.scan_watchlist_list_state.selected() {
-                        let next = if selected < results.len() - 1 {
-                            selected + 1
-                        } else {
-                            0
-                        };
-
-                        self.scan_watchlist_list_state.select(Some(next));
-                        self.scan_watchlist_vertical_scroll_state =
-                            self.scan_watchlist_vertical_scroll_state.position(next);
-                    }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if self.scan.is_none() {
-                        return;
-                    }
-
-                    let results = &self.scan.as_ref().unwrap().watchlist;
-                    if let Some(selected) = self.scan_watchlist_list_state.selected() {
-                        let next = if selected > 0 {
-                            selected - 1
-                        } else {
-                            results.len() - 1
-                        };
-
-                        self.scan_watchlist_list_state.select(Some(next));
-                        self.scan_watchlist_vertical_scroll_state =
-                            self.scan_watchlist_vertical_scroll_state.position(next);
-                    }
-                }
-                _ => {}
-            }
         }
     }
 
@@ -764,6 +697,16 @@ impl App {
             }
 
             terminal.draw(|f| super::ui::draw_ui(f, self))?;
+
+            if let Some(app_action) = &mut self.app_action {
+                match app_action {
+                    AppAction::NewScan => self.new_scan(),
+                    AppAction::NextScan => self.next_scan(),
+                    AppAction::RefreshScan => self.refresh_scan(),
+                }
+                self.app_action = None;
+                continue;
+            }
 
             let timeout = tick_rate.saturating_sub(last_tick.elapsed());
             if event::poll(timeout)? {

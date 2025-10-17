@@ -150,44 +150,48 @@ impl Scan {
         Ok(())
     }
 
-    pub fn set_start_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
+    fn parse_address_hex(addr_hex: &str) -> Result<Option<u64>, ScanError> {
         if addr_hex.is_empty() {
-            self.start_address = None;
+            Ok(None)
         } else {
             let parsed_addr = u64::from_str_radix(addr_hex.trim_start_matches("0x"), 16)
                 .map_err(|_| ScanError::InvalidAddress)?;
-
-            if let Some(end_addr) = self.end_address {
-                if parsed_addr > end_addr {
-                    return Err(ScanError::AddressMismatch);
-                }
-            }
-            self.start_address = Some(parsed_addr);
+            Ok(Some(parsed_addr))
         }
+    }
 
+    fn update_memory_regions(&mut self) -> Result<(), ScanError> {
         self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
             .map_err(|e| ScanError::Memory(e))?;
+        Ok(())
+    }
+
+    pub fn set_start_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
+        let parsed_addr = Self::parse_address_hex(addr_hex)?;
+
+        if let (Some(start), Some(end)) = (parsed_addr, self.end_address) {
+            if start > end {
+                return Err(ScanError::AddressMismatch);
+            }
+        }
+
+        self.start_address = parsed_addr;
+        self.update_memory_regions()?;
 
         Ok(())
     }
+
     pub fn set_end_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
-        if addr_hex.is_empty() {
-            self.start_address = None;
-        } else {
-            let parsed_addr = u64::from_str_radix(addr_hex.trim_start_matches("0x"), 16)
-                .map_err(|_| ScanError::InvalidAddress)?;
+        let parsed_addr = Self::parse_address_hex(addr_hex)?;
 
-            if let Some(start) = self.start_address {
-                if parsed_addr < start {
-                    return Err(ScanError::AddressMismatch);
-                }
+        if let (Some(start), Some(end)) = (self.start_address, parsed_addr) {
+            if end < start {
+                return Err(ScanError::AddressMismatch);
             }
-
-            self.end_address = Some(parsed_addr);
         }
 
-        self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
-            .map_err(|e| ScanError::Memory(e))?;
+        self.end_address = parsed_addr;
+        self.update_memory_regions()?;
 
         Ok(())
     }
@@ -238,6 +242,24 @@ impl Scan {
         Ok(())
     }
 
+    fn refresh_watchlist(&mut self) -> Result<(), ScanError> {
+        for result in &mut self.watchlist {
+            match read_memory_address(
+                self.pid,
+                result.address as usize,
+                result.value_type.get_size() as usize,
+            ) {
+                Err(e) => match e {
+                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
+                    _ => {}
+                },
+                Ok(val) => result.value = val,
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn init(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         self.check_value()?;
         let mut results: Vec<ScanResult> = Vec::new();
@@ -247,6 +269,7 @@ impl Scan {
         }
 
         self.results = results;
+        self.refresh_watchlist()?;
 
         Ok(&self.results)
     }
@@ -266,10 +289,12 @@ impl Scan {
             }
         }
 
+        self.refresh_watchlist()?;
+
         Ok(&self.results)
     }
 
-    pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, MemoryError> {
+    pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         let mut new_results = Vec::with_capacity(self.results.len());
         for result in &mut self.results {
             match read_memory_address(
@@ -278,7 +303,7 @@ impl Scan {
                 result.value_type.get_size() as usize,
             ) {
                 Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(e),
+                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
                     _ => {}
                 },
                 Ok(val) => {
@@ -290,11 +315,35 @@ impl Scan {
         }
 
         self.results = new_results;
+        self.refresh_watchlist()?;
+
         Ok(&self.results)
+    }
+
+    pub fn add_to_watchlist(&mut self, result: ScanResult) {
+        let already_existing = self
+            .watchlist
+            .iter()
+            .position(|w| w.address == result.address);
+        if already_existing.is_some() {
+            return;
+        }
+
+        self.watchlist.push(result);
+    }
+
+    pub fn remove_from_watchlist(&mut self, address: u64) {
+        let already_existing = self.watchlist.iter().position(|w| w.address == address);
+        if already_existing.is_none() {
+            return;
+        }
+
+        self.watchlist.remove(already_existing.unwrap());
     }
 }
 
 mod test {
+    #[allow(unused_imports)]
     use crate::core::mem::write_memory_address;
 
     #[test]
@@ -482,5 +531,688 @@ mod test {
 
         let results = scan.next_scan().unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_u64_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U64,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = scan.set_value_from_str("12345");
+        assert!(result.is_ok());
+        assert_eq!(scan.value, 12345_u64.to_le_bytes().to_vec());
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_i64_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::I64,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = scan.set_value_from_str("-54321");
+        assert!(result.is_ok());
+        assert_eq!(scan.value, (-54321_i64).to_le_bytes().to_vec());
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_u32_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = scan.set_value_from_str("31337");
+        assert!(result.is_ok());
+        assert_eq!(scan.value, 31337_u32.to_le_bytes().to_vec());
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_i32_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::I32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = scan.set_value_from_str("-999");
+        assert!(result.is_ok());
+        assert_eq!(scan.value, (-999_i32).to_le_bytes().to_vec());
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_invalid_value() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = scan.set_value_from_str("not_a_number");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ScanError::InvalidValue));
+    }
+
+    #[test]
+    pub fn test_set_value_from_str_overflow() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        // This value is too large for u32
+        let result = scan.set_value_from_str("99999999999999");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ScanError::InvalidValue));
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_start_address_success() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_start_address("0x1000");
+                assert!(result.is_ok());
+                assert_eq!(scan.start_address, Some(0x1000));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_start_address_without_prefix() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_start_address("ABCD");
+                assert!(result.is_ok());
+                assert_eq!(scan.start_address, Some(0xABCD));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_start_address_empty_clears() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    Some(0x1000),
+                    None,
+                )
+                .unwrap();
+
+                assert_eq!(scan.start_address, Some(0x1000));
+                let result = scan.set_start_address("");
+                assert!(result.is_ok());
+                assert_eq!(scan.start_address, None);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_start_address_invalid_hex() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_start_address("0xGHIJ");
+                assert!(result.is_err());
+                assert!(matches!(result.unwrap_err(), ScanError::InvalidAddress));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_start_address_mismatch_with_end() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    Some(0x1000),
+                )
+                .unwrap();
+
+                // Try to set start address greater than end address
+                let result = scan.set_start_address("0x2000");
+                assert!(result.is_err());
+                assert!(matches!(result.unwrap_err(), ScanError::AddressMismatch));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_end_address_success() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_end_address("0xFFFFFFFF");
+                assert!(result.is_ok());
+                assert_eq!(scan.end_address, Some(0xFFFFFFFF));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_end_address_without_prefix() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_end_address("DEED");
+                assert!(result.is_ok());
+                assert_eq!(scan.end_address, Some(0xDEED));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_end_address_empty_clears() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    Some(0xFFFF),
+                )
+                .unwrap();
+
+                assert_eq!(scan.end_address, Some(0xFFFF));
+                let result = scan.set_end_address("");
+                assert!(result.is_ok());
+                assert_eq!(scan.end_address, None);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_end_address_invalid_hex() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    None,
+                    None,
+                )
+                .unwrap();
+
+                let result = scan.set_end_address("0xXYZ");
+                assert!(result.is_err());
+                assert!(matches!(result.unwrap_err(), ScanError::InvalidAddress));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_set_end_address_mismatch_with_start() {
+        use super::*;
+        use std::process::{Command, Stdio};
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+
+                let mut scan = Scan::new(
+                    proc.0.id(),
+                    31337_u32.to_le_bytes().to_vec(),
+                    ValueType::U32,
+                    Some(0x2000),
+                    None,
+                )
+                .unwrap();
+
+                // Try to set end address smaller than start address
+                let result = scan.set_end_address("0x1000");
+                assert!(result.is_err());
+                assert!(matches!(result.unwrap_err(), ScanError::AddressMismatch));
+            }
+        }
+    }
+
+    #[test]
+    pub fn test_add_to_watchlist_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+
+        scan.add_to_watchlist(result1);
+        assert_eq!(scan.watchlist.len(), 1);
+        assert_eq!(scan.watchlist[0].address, 0x1000);
+
+        scan.add_to_watchlist(result2);
+        assert_eq!(scan.watchlist.len(), 2);
+        assert_eq!(scan.watchlist[1].address, 0x2000);
+    }
+
+    #[test]
+    pub fn test_add_to_watchlist_duplicate_ignores() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+
+        scan.add_to_watchlist(result.clone());
+        assert_eq!(scan.watchlist.len(), 1);
+
+        // Try to add the same address again
+        scan.add_to_watchlist(result);
+        assert_eq!(scan.watchlist.len(), 1);
+    }
+
+    #[test]
+    pub fn test_remove_from_watchlist_success() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+
+        scan.add_to_watchlist(result1.clone());
+        scan.add_to_watchlist(result2.clone());
+        assert_eq!(scan.watchlist.len(), 2);
+
+        scan.remove_from_watchlist(result1.address);
+        assert_eq!(scan.watchlist.len(), 1);
+        assert_eq!(scan.watchlist[0].address, 0x2000);
+    }
+
+    #[test]
+    pub fn test_remove_from_watchlist_not_present() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+
+        scan.add_to_watchlist(result1);
+        assert_eq!(scan.watchlist.len(), 1);
+
+        // Try to remove an address that's not in the watchlist
+        scan.remove_from_watchlist(result2.address);
+        assert_eq!(scan.watchlist.len(), 1);
+        assert_eq!(scan.watchlist[0].address, 0x1000);
+    }
+
+    #[test]
+    pub fn test_remove_from_watchlist_empty() {
+        use super::*;
+        let mut scan = Scan {
+            pid: 0,
+            value: vec![],
+            value_type: ValueType::U32,
+            results: vec![],
+            watchlist: vec![],
+            start_address: None,
+            end_address: None,
+            memory_regions: vec![],
+        };
+
+        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+
+        // Try to remove from empty watchlist
+        scan.remove_from_watchlist(result.address);
+        assert_eq!(scan.watchlist.len(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_refresh_watchlist_success() {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut proc = crate::core::utils::ChildGuard(proc);
+        let stdout = proc.0.stdout.take().expect("child had no stdout");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+
+        let hex_str = line.trim();
+        let address = usize::from_str_radix(hex_str.trim_start_matches("0x"), 16)
+            .expect("failed to parse hex");
+
+        let mut scan = Scan::new(
+            proc.0.id(),
+            31337_u32.to_le_bytes().to_vec(),
+            ValueType::U32,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Initialize scan to get results
+        let results = scan.init().unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Add result to watchlist
+        scan.add_to_watchlist(scan.results[0].clone());
+        assert_eq!(scan.watchlist.len(), 1);
+        assert_eq!(
+            u32::from_le_bytes(scan.watchlist[0].value.as_slice().try_into().unwrap()),
+            31337_u32
+        );
+
+        // Modify the memory value
+        write_memory_address(proc.0.id(), address, &999999_u32.to_le_bytes().to_vec()).unwrap();
+
+        // Refresh the watchlist
+        scan.refresh_watchlist().unwrap();
+
+        // Check that watchlist value was updated
+        assert_eq!(scan.watchlist.len(), 1);
+        assert_eq!(
+            u32::from_le_bytes(scan.watchlist[0].value.as_slice().try_into().unwrap()),
+            999999_u32
+        );
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_refresh_watchlist_multiple_entries() {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut proc = crate::core::utils::ChildGuard(proc);
+        let stdout = proc.0.stdout.take().expect("child had no stdout");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+
+        let hex_str = line.trim();
+        let address = usize::from_str_radix(hex_str.trim_start_matches("0x"), 16)
+            .expect("failed to parse hex");
+
+        let mut scan = Scan::new(
+            proc.0.id(),
+            31337_u32.to_le_bytes().to_vec(),
+            ValueType::U32,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Initialize scan
+        scan.init().unwrap();
+        assert_eq!(scan.results.len(), 1);
+
+        // Add to watchlist
+        scan.add_to_watchlist(scan.results[0].clone());
+
+        // Add a fake entry to watchlist to test multiple entries
+        let fake_result =
+            ScanResult::new(address as u64 + 100, ValueType::U32, vec![10, 20, 30, 40]);
+        scan.add_to_watchlist(fake_result);
+        assert_eq!(scan.watchlist.len(), 2);
+
+        // Modify the memory value
+        write_memory_address(proc.0.id(), address, &888888_u32.to_le_bytes().to_vec()).unwrap();
+
+        // Refresh the watchlist
+        scan.refresh_watchlist().unwrap();
+
+        // Check that first watchlist entry was updated
+        assert_eq!(scan.watchlist.len(), 2);
+        assert_eq!(
+            u32::from_le_bytes(scan.watchlist[0].value.as_slice().try_into().unwrap()),
+            888888_u32
+        );
     }
 }

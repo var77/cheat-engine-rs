@@ -39,7 +39,7 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
         .highlight_symbol(">> ")
         .highlight_spacing(HighlightSpacing::Always)
         .block(Block::bordered().title("Process List"));
-    frame.render_stateful_widget(list_widget, chunks[0], &mut app.list_state);
+    frame.render_stateful_widget(list_widget, chunks[0], &mut app.proc_list_state);
 
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
