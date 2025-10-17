@@ -136,7 +136,7 @@ pub fn get_memory_regions(
 
     let path = PathBuf::from(format!("/proc/{}/maps", pid));
     let file = File::open(&path)
-        .map_err(|e| MemoryError::NoPermission(e.raw_os_error().unwrap_or(-1) as u32))?;
+        .map_err(|e| MemoryError::NoPermission(e.raw_os_error().unwrap_or(-1) as i32))?;
     let reader = io::BufReader::new(file);
 
     let start_addr = start.unwrap_or(0);
