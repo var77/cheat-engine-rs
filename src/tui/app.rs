@@ -264,6 +264,14 @@ impl App {
             .unwrap();
         self.scan_view_selected_widget =
             self.scan_view_widgets[self.scan_view_selected_widget_index].clone();
+
+        if widget == ScanViewWidget::WatchList
+            && let Some(scan) = &self.scan
+                && !scan.watchlist.is_empty() && self.scan_watchlist_list_state.selected().is_none()
+                {
+                    self.scan_watchlist_list_state.select(Some(0));
+                }
+
         self.enable_auto_input();
     }
 
@@ -431,6 +439,11 @@ impl App {
                             self.scan_watchlist_vertical_scroll_state = self
                                 .scan_watchlist_vertical_scroll_state
                                 .content_length(scan.watchlist.len());
+                            if self.scan_watchlist_list_state.selected().is_none()
+                                && !scan.watchlist.is_empty()
+                            {
+                                self.scan_watchlist_list_state.select(Some(0));
+                            }
                             self.app_message =
                                 AppMessage::new("Address added to watchlist", AppMessageType::Info);
                         }
@@ -472,16 +485,17 @@ impl App {
                         KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
                             if let Some(selected) = self.value_type_state.selected()
                                 && let Err(e) = scan.set_value_type(self.value_types[selected])
-                                    && let ScanError::InvalidValue = e {
-                                        self.app_message = AppMessage::new(
-                                            &format!(
-                                                "Invalid value: {:.10} for type: {}",
-                                                self.result_value_input,
-                                                scan.value_type.get_string(),
-                                            ),
-                                            AppMessageType::Error,
-                                        );
-                                    }
+                                && let ScanError::InvalidValue = e
+                            {
+                                self.app_message = AppMessage::new(
+                                    &format!(
+                                        "Invalid value: {:.10} for type: {}",
+                                        self.result_value_input,
+                                        scan.value_type.get_string(),
+                                    ),
+                                    AppMessageType::Error,
+                                );
+                            }
                         }
                         _ => {}
                     }
