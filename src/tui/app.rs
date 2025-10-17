@@ -216,10 +216,8 @@ impl App {
             self.scan_results_vertical_scroll_state.position(0);
         self.scan_watchlist_vertical_scroll_state =
             self.scan_watchlist_vertical_scroll_state.position(0);
-        self.select_widget(ScanViewWidget::ValueInput);
-        self.insert_mode_for(SelectedInput::ScanValue);
-        cursor::reset_cursor(self);
         self.go_to(CurrentScreen::Scan);
+        self.select_widget(ScanViewWidget::ValueInput);
     }
 
     fn go_to(&mut self, screen: CurrentScreen) {
@@ -472,9 +470,18 @@ impl App {
                     );
                     match key_code {
                         KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(selected) = self.value_type_state.selected() {
-                                scan.set_value_type(self.value_types[selected]);
-                            }
+                            if let Some(selected) = self.value_type_state.selected()
+                                && let Err(e) = scan.set_value_type(self.value_types[selected])
+                                    && let ScanError::InvalidValue = e {
+                                        self.app_message = AppMessage::new(
+                                            &format!(
+                                                "Invalid value: {:.10} for type: {}",
+                                                self.result_value_input,
+                                                scan.value_type.get_string(),
+                                            ),
+                                            AppMessageType::Error,
+                                        );
+                                    }
                         }
                         _ => {}
                     }
@@ -723,7 +730,10 @@ impl App {
                 KeyCode::Char(_) | KeyCode::Backspace => {
                     self.show_process_list();
                 }
-                KeyCode::Enter => self.select_process(),
+                KeyCode::Enter => {
+                    self.select_process();
+                    return;
+                }
                 _ => {}
             }
         }

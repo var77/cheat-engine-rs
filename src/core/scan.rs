@@ -26,6 +26,15 @@ impl ValueType {
             ValueType::I32 => format!("i32 ({}B)", self.get_size()),
         }
     }
+
+    pub fn get_value_string(&self, value: &[u8]) -> String {
+        match self {
+            ValueType::U64 => format!("{}", u64::from_le_bytes(value.try_into().unwrap())),
+            ValueType::I64 => format!("{}", i64::from_le_bytes(value.try_into().unwrap())),
+            ValueType::U32 => format!("{}", u32::from_le_bytes(value.try_into().unwrap())),
+            ValueType::I32 => format!("{}", i32::from_le_bytes(value.try_into().unwrap())),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,24 +74,7 @@ impl ScanResult {
     }
 
     pub fn get_string(&self) -> String {
-        match self.value_type {
-            ValueType::U64 => format!(
-                "{}",
-                u64::from_le_bytes(self.value.as_slice().try_into().unwrap())
-            ),
-            ValueType::I64 => format!(
-                "{}",
-                i64::from_le_bytes(self.value.as_slice().try_into().unwrap())
-            ),
-            ValueType::U32 => format!(
-                "{}",
-                u32::from_le_bytes(self.value.as_slice().try_into().unwrap())
-            ),
-            ValueType::I32 => format!(
-                "{}",
-                i32::from_le_bytes(self.value.as_slice().try_into().unwrap())
-            ),
-        }
+        self.value_type.get_value_string(self.value.as_slice())
     }
 }
 
@@ -121,8 +113,13 @@ impl Scan {
         })
     }
 
-    pub fn set_value_type(&mut self, value_type: ValueType) {
+    pub fn set_value_type(&mut self, value_type: ValueType) -> Result<(), ScanError> {
+        let current_value_string = self.value_type.get_value_string(self.value.as_slice());
         self.value_type = value_type;
+        if !self.value.is_empty() {
+            self.set_value_from_str(&current_value_string)?;
+        }
+        Ok(())
     }
 
     pub fn value_from_str(&mut self, value_str: &str) -> Result<Vec<u8>, ScanError> {
@@ -318,7 +315,9 @@ impl Scan {
                 }
                 Ok(val) => {
                     if val == self.value {
-                        new_results.push(result.clone());
+                        let mut new_result = result.clone();
+                        new_result.value = val;
+                        new_results.push(new_result);
                     }
                 }
             }
