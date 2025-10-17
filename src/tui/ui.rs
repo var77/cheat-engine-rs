@@ -37,7 +37,14 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
         .highlight_style(Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ")
         .highlight_spacing(HighlightSpacing::Always)
-        .block(Block::bordered().title("Process List"));
+        .block(
+            Block::bordered()
+                .title("Process List")
+                .style(match app.input_mode {
+                    InputMode::Normal => Style::default().fg(Color::Yellow),
+                    InputMode::Insert => Style::default(),
+                }),
+        );
     frame.render_stateful_widget(list_widget, chunks[0], &mut app.proc_list_state);
 
     frame.render_stateful_widget(
@@ -67,11 +74,11 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
 
     // Help text
     let help_text = Line::from(vec![
-        Span::from("↑/k: Up  ").fg(Color::Green),
-        Span::from("↓/j: Down  ").fg(Color::Green),
-        Span::from("f: Filter  ").fg(Color::Green),
-        Span::from("r: Refresh  ").fg(Color::Green),
-        Span::from("Enter: Select  ").fg(Color::Green),
+        Span::from("↑/k: Up | ").fg(Color::Green),
+        Span::from("↓/j: Down | ").fg(Color::Green),
+        Span::from("Tab/Shift Tab: Change Pane | ").fg(Color::Green),
+        Span::from("r: Refresh | ").fg(Color::Green),
+        Span::from("Enter: Select | ").fg(Color::Green),
         Span::from("q: Quit").fg(Color::Green),
     ]);
 
@@ -293,29 +300,46 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     }
 
     // Help text
-    let mut help_text_items = vec![Span::from("Tab/Shift+Tab: Change Pane  ").fg(Color::Green)];
+    let mut help_text_items = vec![Span::from("Tab/Shift+Tab: Change pane | ").fg(Color::Green)];
 
-    if app.scan_view_selected_widget == ScanViewWidget::ScanResults {
+    match app.scan_view_selected_widget {
+        ScanViewWidget::ScanResults
+        | ScanViewWidget::WatchList
+        | ScanViewWidget::ValueTypeSelect => {
+            help_text_items.extend(vec![
+                Span::from("↑/k: Up | ").fg(Color::Green),
+                Span::from("↓/j: Down | ").fg(Color::Green),
+            ]);
+        }
+        _ => {}
+    }
+
+    help_text_items.push(Span::from("s: New Scan | ").fg(Color::Green));
+
+    if let Some(scan) = &app.scan
+        && !scan.results.is_empty()
+    {
         help_text_items.extend(vec![
-            Span::from("s: New Scan  ").fg(Color::Green),
-            Span::from("n: Next Scan  ").fg(Color::Green),
-            Span::from("w: Add to Watchlist  ").fg(Color::Green),
+            Span::from("n: Next Scan | ").fg(Color::Green),
+            Span::from("r: Refresh | ").fg(Color::Green),
         ]);
     }
 
-    if app.scan_view_selected_widget == ScanViewWidget::ScanResults
-        || app.scan_view_selected_widget == ScanViewWidget::WatchList
-    {
-        help_text_items.extend(vec![
-            Span::from("↑/k: Up  ").fg(Color::Green),
-            Span::from("↓/j: Down  ").fg(Color::Green),
-            Span::from("r: Refresh  ").fg(Color::Green),
-            Span::from("Enter: Update Value  ").fg(Color::Green),
-        ]);
+    if app.scan_view_selected_widget == ScanViewWidget::ScanResults {
+        help_text_items.extend(vec![Span::from("w: Add to watchlist | ").fg(Color::Green)]);
     }
 
     if app.scan_view_selected_widget == ScanViewWidget::WatchList {
-        help_text_items.push(Span::from("d: Remove from Watchlist  ").fg(Color::Green));
+        help_text_items.push(Span::from("d: Remove from watchlist | ").fg(Color::Green));
+    }
+
+    match app.scan_view_selected_widget {
+        ScanViewWidget::ScanResults | ScanViewWidget::WatchList => {
+            help_text_items.extend(vec![
+                Span::from("u/Enter: Update Value | ").fg(Color::Green),
+            ]);
+        }
+        _ => {}
     }
 
     help_text_items.push(Span::from("q: Quit").fg(Color::Green));
