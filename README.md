@@ -14,7 +14,7 @@ This is a simple memory scanner that lets you find and change values in running 
 
 ## What it can do
 
-- Scan memory for 32-bit and 64-bit numbers
+- Scan memory for 32-bit and 64-bit numbers and strings
 - Filter results by comparing old and new values
 - Watch memory addresses in real-time
 - Terminal-based UI using keyboard shortcuts
@@ -81,7 +81,7 @@ CARGO_TARGET_DIR=/tmp/target-root cargo test -- --include-ignored
 ## TODO
 
 - [ ] Windows support
-- [ ] More data types (floats, doubles, strings, etc.)
+- [ ] More data types (floats, doubles, etc.)
 - [ ] Separate UI and worker threads
 - [ ] Speed up initial scan with parallel processing (rayon)
 - [ ] Pointer scanning

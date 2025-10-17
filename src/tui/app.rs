@@ -143,6 +143,7 @@ impl App {
                 ValueType::I64,
                 ValueType::U32,
                 ValueType::I32,
+                ValueType::String,
             ],
             value_type_state: ListState::default(),
             scan_view_widgets: vec![
@@ -267,10 +268,11 @@ impl App {
 
         if widget == ScanViewWidget::WatchList
             && let Some(scan) = &self.scan
-                && !scan.watchlist.is_empty() && self.scan_watchlist_list_state.selected().is_none()
-                {
-                    self.scan_watchlist_list_state.select(Some(0));
-                }
+            && !scan.watchlist.is_empty()
+            && self.scan_watchlist_list_state.selected().is_none()
+        {
+            self.scan_watchlist_list_state.select(Some(0));
+        }
 
         self.enable_auto_input();
     }

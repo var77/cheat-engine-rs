@@ -10,6 +10,7 @@ pub enum ValueType {
     I64,
     U32,
     I32,
+    String,
 }
 
 impl ValueType {
@@ -17,6 +18,7 @@ impl ValueType {
         match self {
             ValueType::U64 | ValueType::I64 => 8,
             ValueType::U32 | ValueType::I32 => 4,
+            ValueType::String => 0,
         }
     }
 
@@ -26,15 +28,21 @@ impl ValueType {
             ValueType::I64 => format!("i64 ({}B)", self.get_size()),
             ValueType::U32 => format!("u32 ({}B)", self.get_size()),
             ValueType::I32 => format!("i32 ({}B)", self.get_size()),
+            ValueType::String => String::from("string"),
         }
     }
 
     pub fn get_value_string(&self, value: &[u8]) -> String {
+        if value.is_empty() {
+            return String::new();
+        }
+
         match self {
             ValueType::U64 => format!("{}", u64::from_le_bytes(value.try_into().unwrap())),
             ValueType::I64 => format!("{}", i64::from_le_bytes(value.try_into().unwrap())),
             ValueType::U32 => format!("{}", u32::from_le_bytes(value.try_into().unwrap())),
             ValueType::I32 => format!("{}", i32::from_le_bytes(value.try_into().unwrap())),
+            ValueType::String => String::from_utf8(value.to_vec()).unwrap(),
         }
     }
 }
@@ -146,6 +154,7 @@ impl Scan {
                 .map_err(|_| ScanError::InvalidValue)?
                 .to_le_bytes()
                 .to_vec(),
+            ValueType::String => value_str.as_bytes().to_vec(),
         })
     }
 
@@ -206,7 +215,7 @@ impl Scan {
         let mut current_address = region.start as usize;
         let end = region.end as usize;
 
-        let size = self.value_type.get_size() as usize;
+        let size = self.value.len();
         const BLOCK_SIZE: usize = 0x10000;
 
         while current_address < end {
@@ -248,11 +257,7 @@ impl Scan {
 
     fn refresh_watchlist(&mut self) -> Result<(), ScanError> {
         for result in &mut self.watchlist {
-            match read_memory_address(
-                self.pid,
-                result.address as usize,
-                result.value_type.get_size() as usize,
-            ) {
+            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
@@ -281,11 +286,7 @@ impl Scan {
 
     pub fn refresh(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         for result in &mut self.results {
-            match read_memory_address(
-                self.pid,
-                result.address as usize,
-                result.value_type.get_size() as usize,
-            ) {
+            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
@@ -303,11 +304,7 @@ impl Scan {
     pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         let mut new_results = Vec::with_capacity(self.results.len());
         for result in &mut self.results {
-            match read_memory_address(
-                self.pid,
-                result.address as usize,
-                result.value_type.get_size() as usize,
-            ) {
+            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
