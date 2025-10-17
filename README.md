@@ -1,4 +1,4 @@
-# Intro
+# CheatEngineRS
 
 <p align="center">
   <img src="assets/logo.png" alt="Cheat Engine RS Logo" width="200"/>
