@@ -124,6 +124,58 @@ pub fn get_memory_regions(
     Ok(regions)
 }
 
+#[cfg(target_os = "linux")]
+pub fn get_memory_regions(
+    pid: u32,
+    start: Option<u64>,
+    end: Option<u64>,
+) -> Result<Vec<MemoryRegion>, MemoryError> {
+    use std::fs::File;
+    use std::io::{self, BufRead};
+    use std::path::PathBuf;
+
+    let path = PathBuf::from(format!("/proc/{}/maps", pid));
+    let file = File::open(&path)
+        .map_err(|e| MemoryError::NoPermission(e.raw_os_error().unwrap_or(-1) as u32))?;
+    let reader = io::BufReader::new(file);
+
+    let start_addr = start.unwrap_or(0);
+    let end_addr = end.unwrap_or(u64::MAX);
+
+    let mut regions = Vec::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|_| MemoryError::MemRead(0))?;
+        // 00400000-00452000 r-xp 00000000 fd:00
+        let mut parts = line.split_whitespace();
+        let range = parts.next().ok_or_else(|| MemoryError::MemRead(0))?;
+        let perms = parts.next().unwrap_or("");
+
+        let mut range_split = range.split('-');
+        let start_str = range_split.next().unwrap();
+        let end_str = range_split.next().unwrap();
+        let start_addr_val = u64::from_str_radix(start_str, 16).unwrap();
+        let end_addr_val = u64::from_str_radix(end_str, 16).unwrap();
+
+        // Filter by address range
+        if end_addr_val < start_addr || start_addr_val > end_addr {
+            continue;
+        }
+
+        if !perms.contains('w') {
+            continue;
+        }
+
+        regions.push(MemoryRegion {
+            start: start_addr_val,
+            end: end_addr_val,
+            perms: perms[..3].to_string(), // take 'rwx'
+        });
+    }
+
+    Ok(regions)
+}
+
 pub fn read_memory_address(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>, MemoryError> {
     let handle = (pid as Pid).try_into_process_handle();
 
