@@ -50,7 +50,7 @@ pub fn get_memory_regions(
         task_for_pid(
             mach_task_self() as mach_port_name_t,
             pid as i32,
-            std::mem::transmute(&task as *const u32 as *mut u32),
+            &task as *const u32 as *mut u32,
         )
     };
 

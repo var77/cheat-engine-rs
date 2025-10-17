@@ -404,8 +404,8 @@ impl App {
                         Some(&mut self.scan_results_vertical_scroll_state),
                         &mut self.last_g_press_time,
                     );
-                    if key_code == KeyCode::Char('w') {
-                        if let Some(selected) = self.scan_results_list_state.selected() {
+                    if key_code == KeyCode::Char('w')
+                        && let Some(selected) = self.scan_results_list_state.selected() {
                             let selected_result = scan.results.get(selected);
                             if let Some(result) = selected_result {
                                 scan.add_to_watchlist(result.clone());
@@ -418,7 +418,6 @@ impl App {
                                 );
                             }
                         }
-                    }
                 }
                 ScanViewWidget::WatchList => {
                     utils::handle_list_events(
@@ -428,8 +427,8 @@ impl App {
                         Some(&mut self.scan_watchlist_vertical_scroll_state),
                         &mut self.last_g_press_time,
                     );
-                    if key_code == KeyCode::Char('d') {
-                        if let Some(selected) = self.scan_watchlist_list_state.selected() {
+                    if key_code == KeyCode::Char('d')
+                        && let Some(selected) = self.scan_watchlist_list_state.selected() {
                             let selected_result = scan.watchlist.get(selected);
                             if let Some(result) = selected_result {
                                 scan.remove_from_watchlist(result.address);
@@ -442,7 +441,6 @@ impl App {
                                 );
                             }
                         }
-                    }
                 }
                 ScanViewWidget::ValueTypeSelect => {
                     utils::handle_list_events(
@@ -527,7 +525,8 @@ impl App {
                     });
 
                     if self.selected_value.is_some() {
-                        self.result_value_input = self.selected_value.as_ref().unwrap().to_string();
+                        self.result_value_input =
+                            self.selected_value.as_ref().unwrap().get_string();
                         self.insert_mode_for(SelectedInput::ResultValue);
                         self.go_to(CurrentScreen::ValueEditing);
                     } else {
@@ -746,18 +745,12 @@ impl App {
             _ => {}
         }
 
-        match &self.selected_input {
-            Some(selected_input) => match selected_input {
-                SelectedInput::ProcessFilter => match key.code {
-                    KeyCode::Char(_) | KeyCode::Backspace => {
-                        self.show_process_list();
-                    }
-                    _ => {}
-                },
-                _ => {}
-            },
-            None => {}
-        }
+        if let Some(selected_input) = &self.selected_input && selected_input == &SelectedInput::ProcessFilter { match key.code {
+            KeyCode::Char(_) | KeyCode::Backspace => {
+                self.show_process_list();
+            }
+            _ => {}
+        } }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Box<dyn Error>> {

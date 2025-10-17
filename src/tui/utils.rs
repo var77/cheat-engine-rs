@@ -6,12 +6,12 @@ use ratatui::{
 };
 
 pub mod cursor {
-    pub fn move_cursor_left(input: &String, char_index: &mut usize) {
+    pub fn move_cursor_left(input: &str, char_index: &mut usize) {
         let cursor_moved_left = char_index.saturating_sub(1);
         *char_index = clamp_cursor(input, cursor_moved_left);
     }
 
-    pub fn move_cursor_right(input: &String, char_index: &mut usize) {
+    pub fn move_cursor_right(input: &str, char_index: &mut usize) {
         let cursor_moved_right = char_index.saturating_add(1);
         *char_index = clamp_cursor(input, cursor_moved_right);
     }
@@ -97,8 +97,7 @@ pub fn handle_list_events(
         }
         KeyCode::Char('G') => {
             let next = list_size - 1;
-            if scroll_state.is_some() {
-                let scroll_state = scroll_state.unwrap();
+            if let Some(scroll_state) = scroll_state {
                 *scroll_state = scroll_state.position(next);
             }
             list_state.select(Some(next));

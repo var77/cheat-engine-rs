@@ -9,9 +9,8 @@ use ratatui::{
     },
 };
 
-use crate::{
-    core::scan::ScanResult,
-    tui::app::{App, AppMessageType, CurrentScreen, InputMode, ScanViewWidget, SelectedInput},
+use crate::tui::app::{
+    App, AppMessageType, CurrentScreen, InputMode, ScanViewWidget, SelectedInput,
 };
 
 pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
@@ -83,18 +82,6 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
     frame.render_widget(help_bar, chunks[2]);
 }
 
-// fn get_input_style(app: &App, input: SelectedInput) -> Style {
-//     if app.input_mode == InputMode::Insert
-//         && let Some(selected_input) = &app.selected_input
-//     {
-//         if *selected_input == input {
-//             return Style::default().fg(Color::Yellow);
-//         }
-//     }
-//
-//     Style::default()
-// }
-
 fn get_active_widget_style(app: &App, widget: ScanViewWidget) -> Style {
     if app.scan_view_selected_widget == widget {
         Style::default().fg(Color::Yellow)
@@ -148,7 +135,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
-                result.to_string()
+                result.get_string()
             )))
             .style(Style::new().fg(Color::Green))
         })
@@ -185,7 +172,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
-                result.to_string()
+                result.get_string()
             )))
             .style(Style::new().fg(Color::Green))
         })

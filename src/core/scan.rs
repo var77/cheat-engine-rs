@@ -64,7 +64,7 @@ impl ScanResult {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn get_string(&self) -> String {
         match self.value_type {
             ValueType::U64 => format!(
                 "{}",
