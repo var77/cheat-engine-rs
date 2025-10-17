@@ -136,9 +136,10 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
 
     // Render list
     let mut scan_result_items = &vec![];
-    let mut watchlist_items: &Vec<ScanResult> = &vec![];
+    let mut watchlist_items = &vec![];
     if let Some(scan) = &app.scan {
         scan_result_items = &scan.results;
+        watchlist_items = &scan.watchlist;
     }
 
     let result_items: Vec<ListItem> = scan_result_items
@@ -235,7 +236,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     let items: Vec<ListItem> = app
         .value_types
         .iter()
-        .map(|i| ListItem::new(i.to_string()))
+        .map(|i| ListItem::new(i.get_string()))
         .collect();
 
     let list = List::new(items)
@@ -370,6 +371,26 @@ pub fn draw_exit_screen(frame: &mut Frame, _app: &mut App) {
     frame.render_widget(exit_paragraph, area);
 }
 
+pub fn draw_value_editing_screen(frame: &mut Frame, app: &mut App) {
+    frame.render_widget(Clear, frame.area());
+    let selected_value = app.selected_value.as_ref().unwrap();
+
+    let popup_block = Block::default()
+        .title(format!(" Editing - 0x{:x} ", selected_value.address))
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+
+    let value_input = Paragraph::new(app.result_value_input.as_str())
+        .style(Style::default().fg(Color::Yellow))
+        .block(popup_block);
+    let area = centered_rect(50, 30, frame.area());
+    frame.set_cursor_position(Position::new(
+        area.x + app.character_index as u16 + 1,
+        area.y + 1,
+    ));
+    frame.render_widget(value_input, area);
+}
+
 pub fn draw_ui(frame: &mut Frame, app: &mut App) {
     match app.current_screen {
         CurrentScreen::ProcessList => {
@@ -378,10 +399,12 @@ pub fn draw_ui(frame: &mut Frame, app: &mut App) {
         CurrentScreen::Scan => {
             draw_scan_screen(frame, app);
         }
+        CurrentScreen::ValueEditing => {
+            draw_value_editing_screen(frame, app);
+        }
         CurrentScreen::Exiting => {
             draw_exit_screen(frame, app);
         }
-        _ => {}
     }
 }
 

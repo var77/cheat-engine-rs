@@ -39,6 +39,7 @@ pub fn get_list(filter: Option<&str>) -> Vec<ProcInfo> {
 }
 
 mod test {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

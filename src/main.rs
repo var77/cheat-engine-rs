@@ -2,8 +2,7 @@ mod core;
 mod tui;
 
 fn main() {
-    match tui::run() {
-        Err(e) => panic!("{}", e),
-        Ok(_) => {}
+    if let Err(e) = tui::run() {
+        panic!("{}", e);
     }
 }

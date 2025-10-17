@@ -26,7 +26,7 @@ pub mod cursor {
     ///
     /// Since each character in a string can be contain multiple bytes, it's necessary to calculate
     /// the byte index based on the index of the character.
-    pub fn byte_index(input: &String, character_index: usize) -> usize {
+    pub fn byte_index(input: &str, character_index: usize) -> usize {
         input
             .char_indices()
             .map(|(i, _)| i)
@@ -52,7 +52,7 @@ pub mod cursor {
         }
     }
 
-    pub fn clamp_cursor(input: &String, new_cursor_pos: usize) -> usize {
+    pub fn clamp_cursor(input: &str, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(0, input.chars().count())
     }
 
@@ -76,8 +76,7 @@ pub fn handle_list_events(
                 } else {
                     0
                 };
-                if scroll_state.is_some() {
-                    let scroll_state = scroll_state.unwrap();
+                if let Some(scroll_state) = scroll_state {
                     *scroll_state = scroll_state.position(next);
                 }
                 list_state.select(Some(next));
@@ -91,8 +90,7 @@ pub fn handle_list_events(
                     list_size - 1
                 };
                 list_state.select(Some(next));
-                if scroll_state.is_some() {
-                    let scroll_state = scroll_state.unwrap();
+                if let Some(scroll_state) = scroll_state {
                     *scroll_state = scroll_state.position(next);
                 }
             }
@@ -106,17 +104,16 @@ pub fn handle_list_events(
             list_state.select(Some(next));
         }
         KeyCode::Char('g') => {
-            if let Some(t) = last_g_press_time {
-                if t.elapsed() < Duration::from_millis(500) {
-                    *last_g_press_time = None;
-                    let next = 0;
-                    if scroll_state.is_some() {
-                        let scroll_state = scroll_state.unwrap();
-                        *scroll_state = scroll_state.position(next);
-                    }
-                    list_state.select(Some(next));
-                    return;
+            if let Some(t) = last_g_press_time
+                && t.elapsed() < Duration::from_millis(500)
+            {
+                *last_g_press_time = None;
+                let next = 0;
+                if let Some(scroll_state) = scroll_state {
+                    *scroll_state = scroll_state.position(next);
                 }
+                list_state.select(Some(next));
+                return;
             }
             *last_g_press_time = Some(Instant::now());
         }

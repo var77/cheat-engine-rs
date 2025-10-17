@@ -1,5 +1,6 @@
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 
+#[allow(dead_code)]
 pub struct ChildGuard(pub Child);
 
 impl Drop for ChildGuard {

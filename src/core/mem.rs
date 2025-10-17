@@ -3,17 +3,17 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub enum MemoryError {
-    NoPermissionError(i32),
-    MemReadError(i32),
-    ProcessAttachError(i32),
+    NoPermission(i32),
+    MemRead(i32),
+    ProcessAttach(i32),
 }
 
 impl Display for MemoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoPermissionError(code) => write!(f, "Permission Denied: OS Error ({code})"),
-            Self::MemReadError(code) => write!(f, "Could not read memory: OS Error ({code})"),
-            Self::ProcessAttachError(code) => {
+            Self::NoPermission(code) => write!(f, "Permission Denied: OS Error ({code})"),
+            Self::MemRead(code) => write!(f, "Could not read memory: OS Error ({code})"),
+            Self::ProcessAttach(code) => {
                 write!(f, "Could not attach to process: OS Error ({code})")
             }
         }
@@ -21,15 +21,10 @@ impl Display for MemoryError {
 }
 
 #[derive(Debug)]
-pub enum Region {
-    Writable,
-    Range(u64, u64),
-}
-
-#[derive(Debug)]
 pub struct MemoryRegion {
     pub start: u64,
     pub end: u64,
+    #[allow(dead_code)]
     pub perms: String,
 }
 
@@ -55,12 +50,12 @@ pub fn get_memory_regions(
         task_for_pid(
             mach_task_self() as mach_port_name_t,
             pid as i32,
-            std::mem::transmute(&task),
+            std::mem::transmute(&task as *const u32 as *mut u32),
         )
     };
 
     if kret != KERN_SUCCESS {
-        return Err(MemoryError::NoPermissionError(kret));
+        return Err(MemoryError::NoPermission(kret));
     }
 
     let mut regions = Vec::new();
@@ -91,7 +86,7 @@ pub fn get_memory_regions(
         if kr == KERN_INVALID_ADDRESS {
             break;
         } else if kr != KERN_SUCCESS {
-            return Err(MemoryError::MemReadError(kr));
+            return Err(MemoryError::MemRead(kr));
         }
 
         if info.protection & VM_PROT_WRITE == 0 {
@@ -133,41 +128,39 @@ pub fn read_memory_address(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>
     let handle = (pid as Pid).try_into_process_handle();
 
     if let Err(e) = handle {
-        return Err(MemoryError::ProcessAttachError(
-            e.raw_os_error().unwrap_or(-1),
-        ));
+        return Err(MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)));
     }
 
     let handle = handle.unwrap();
 
     let mut result = vec![0; size];
     if let Err(e) = handle.copy_address(addr, &mut result) {
-        return Err(MemoryError::MemReadError(e.raw_os_error().unwrap_or(-1)));
+        return Err(MemoryError::MemRead(e.raw_os_error().unwrap_or(-1)));
     }
 
     Ok(result)
 }
 
-pub fn write_memory_address(pid: u32, addr: usize, value: &Vec<u8>) -> Result<(), MemoryError> {
+pub fn write_memory_address(pid: u32, addr: usize, value: &[u8]) -> Result<(), MemoryError> {
     let handle = (pid as Pid).try_into_process_handle();
 
     if let Err(e) = handle {
-        return Err(MemoryError::ProcessAttachError(
-            e.raw_os_error().unwrap_or(-1),
-        ));
+        return Err(MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)));
     }
 
     let handle = handle.unwrap();
 
     if let Err(e) = handle.put_address(addr, value) {
-        return Err(MemoryError::MemReadError(e.raw_os_error().unwrap_or(-1)));
+        return Err(MemoryError::MemRead(e.raw_os_error().unwrap_or(-1)));
     }
 
     Ok(())
 }
 
 mod test {
+    #[allow(unused_imports)]
     use super::*;
+    #[allow(unused_imports)]
     use std::process::{Command, Stdio};
 
     #[test]
@@ -178,7 +171,7 @@ mod test {
 
         if let Err(e) = result {
             match e {
-                MemoryError::NoPermissionError(code) => assert_eq!(code, 5),
+                MemoryError::NoPermission(code) => assert_eq!(code, 5),
                 _ => assert!(false),
             }
         } else {

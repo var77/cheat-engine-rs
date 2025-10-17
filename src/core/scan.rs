@@ -1,4 +1,6 @@
-use crate::core::mem::{MemoryError, MemoryRegion, get_memory_regions, read_memory_address};
+use crate::core::mem::{
+    MemoryError, MemoryRegion, get_memory_regions, read_memory_address, write_memory_address,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ValueType {
@@ -16,7 +18,7 @@ impl ValueType {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn get_string(&self) -> String {
         match self {
             ValueType::U64 => format!("u64 ({}B)", self.get_size()),
             ValueType::I64 => format!("i64 ({}B)", self.get_size()),
@@ -104,8 +106,8 @@ impl Scan {
         start_address: Option<u64>,
         end_address: Option<u64>,
     ) -> Result<Self, ScanError> {
-        let memory_regions = get_memory_regions(pid, start_address, end_address)
-            .map_err(|e| ScanError::Memory(e))?;
+        let memory_regions =
+            get_memory_regions(pid, start_address, end_address).map_err(ScanError::Memory)?;
 
         Ok(Scan {
             pid,
@@ -123,8 +125,8 @@ impl Scan {
         self.value_type = value_type;
     }
 
-    pub fn set_value_from_str(&mut self, value_str: &str) -> Result<(), ScanError> {
-        self.value = match self.value_type {
+    pub fn value_from_str(&mut self, value_str: &str) -> Result<Vec<u8>, ScanError> {
+        Ok(match self.value_type {
             ValueType::U64 => value_str
                 .parse::<u64>()
                 .map_err(|_| ScanError::InvalidValue)?
@@ -145,7 +147,11 @@ impl Scan {
                 .map_err(|_| ScanError::InvalidValue)?
                 .to_le_bytes()
                 .to_vec(),
-        };
+        })
+    }
+
+    pub fn set_value_from_str(&mut self, value_str: &str) -> Result<(), ScanError> {
+        self.value = self.value_from_str(value_str)?;
 
         Ok(())
     }
@@ -162,17 +168,17 @@ impl Scan {
 
     fn update_memory_regions(&mut self) -> Result<(), ScanError> {
         self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
-            .map_err(|e| ScanError::Memory(e))?;
+            .map_err(ScanError::Memory)?;
         Ok(())
     }
 
     pub fn set_start_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
         let parsed_addr = Self::parse_address_hex(addr_hex)?;
 
-        if let (Some(start), Some(end)) = (parsed_addr, self.end_address) {
-            if start > end {
-                return Err(ScanError::AddressMismatch);
-            }
+        if let (Some(start), Some(end)) = (parsed_addr, self.end_address)
+            && start > end
+        {
+            return Err(ScanError::AddressMismatch);
         }
 
         self.start_address = parsed_addr;
@@ -184,10 +190,10 @@ impl Scan {
     pub fn set_end_address(&mut self, addr_hex: &str) -> Result<(), ScanError> {
         let parsed_addr = Self::parse_address_hex(addr_hex)?;
 
-        if let (Some(start), Some(end)) = (self.start_address, parsed_addr) {
-            if end < start {
-                return Err(ScanError::AddressMismatch);
-            }
+        if let (Some(start), Some(end)) = (self.start_address, parsed_addr)
+            && end < start
+        {
+            return Err(ScanError::AddressMismatch);
         }
 
         self.end_address = parsed_addr;
@@ -211,16 +217,17 @@ impl Scan {
             }
 
             match read_memory_address(self.pid, current_address, to_read) {
-                Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(e),
-                    _ => {}
-                },
+                Err(e) => {
+                    if let MemoryError::ProcessAttach(_) = e {
+                        return Err(e);
+                    }
+                }
                 Ok(val) => {
                     for i in 0..=to_read.saturating_sub(size) {
-                        if i + size < val.len() && self.value == &val[i..i + size] {
+                        if i + size < val.len() && self.value == val[i..i + size] {
                             results.push(ScanResult::new(
                                 (current_address + i) as u64,
-                                self.value_type.clone(),
+                                self.value_type,
                                 val[i..i + size].to_vec(),
                             ));
                         }
@@ -249,10 +256,11 @@ impl Scan {
                 result.address as usize,
                 result.value_type.get_size() as usize,
             ) {
-                Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
-                    _ => {}
-                },
+                Err(e) => {
+                    if let MemoryError::ProcessAttach(_) = e {
+                        return Err(ScanError::Memory(e));
+                    }
+                }
                 Ok(val) => result.value = val,
             }
         }
@@ -265,7 +273,7 @@ impl Scan {
         let mut results: Vec<ScanResult> = Vec::new();
 
         for region in &self.memory_regions {
-            results.extend(self.scan_region(region).map_err(|e| ScanError::Memory(e))?);
+            results.extend(self.scan_region(region).map_err(ScanError::Memory)?);
         }
 
         self.results = results;
@@ -281,10 +289,11 @@ impl Scan {
                 result.address as usize,
                 result.value_type.get_size() as usize,
             ) {
-                Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
-                    _ => {}
-                },
+                Err(e) => {
+                    if let MemoryError::ProcessAttach(_) = e {
+                        return Err(ScanError::Memory(e));
+                    }
+                }
                 Ok(val) => result.value = val,
             }
         }
@@ -302,10 +311,11 @@ impl Scan {
                 result.address as usize,
                 result.value_type.get_size() as usize,
             ) {
-                Err(e) => match e {
-                    MemoryError::ProcessAttachError(_) => return Err(ScanError::Memory(e)),
-                    _ => {}
-                },
+                Err(e) => {
+                    if let MemoryError::ProcessAttach(_) = e {
+                        return Err(ScanError::Memory(e));
+                    }
+                }
                 Ok(val) => {
                     if val == self.value {
                         new_results.push(result.clone());
@@ -339,6 +349,12 @@ impl Scan {
         }
 
         self.watchlist.remove(already_existing.unwrap());
+    }
+
+    pub fn update_value(&mut self, address: u64, value_str: &str) -> Result<(), ScanError> {
+        let value = self.value_from_str(value_str)?;
+        write_memory_address(self.pid, address as usize, &value).map_err(ScanError::Memory)?;
+        Ok(())
     }
 }
 
@@ -463,7 +479,7 @@ mod test {
             31337_u32
         );
 
-        write_memory_address(proc.0.id(), address, &333333_u32.to_le_bytes().to_vec()).unwrap();
+        scan.update_value(address as u64, "333333").unwrap();
 
         let results = scan.refresh().unwrap();
         assert_eq!(results.len(), 1);
