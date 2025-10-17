@@ -6,7 +6,7 @@
 
 A minimal CheatEngine implementation built with Rust and a terminal UI.
 
-[![asciicast](https://asciinema.org/a/QwTnsAF9VzyFUBYLqTVLvAf9S.svg)](https://asciinema.org/a/QwTnsAF9VzyFUBYLqTVLvAf9S)
+[![Demo](assets/demo.gif)](https://asciinema.org/a/QwTnsAF9VzyFUBYLqTVLvAf9S)
 
 ## What is this?
 
