@@ -40,6 +40,7 @@ name = "cheat-engine-rs"
 version = "0.1.0"
 dependencies = [
  "mach-sys",
+ "memchr",
  "process-memory",
  "ratatui",
  "sysinfo",

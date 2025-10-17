@@ -1,3 +1,5 @@
+use memchr::memmem;
+
 use crate::core::mem::{
     MemoryError, MemoryRegion, get_memory_regions, read_memory_address, write_memory_address,
 };
@@ -220,15 +222,13 @@ impl Scan {
                     }
                 }
                 Ok(val) => {
-                    for i in 0..=to_read.saturating_sub(size) {
-                        if i + size < val.len() && self.value == val[i..i + size] {
-                            results.push(ScanResult::new(
-                                (current_address + i) as u64,
-                                self.value_type,
-                                val[i..i + size].to_vec(),
-                            ));
-                        }
-                    }
+                    results.extend(memmem::find_iter(&val, &self.value).map(|i| {
+                        ScanResult::new(
+                            (current_address + i) as u64,
+                            self.value_type,
+                            self.value.clone(),
+                        )
+                    }));
                 }
             }
 
