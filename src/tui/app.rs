@@ -50,6 +50,12 @@ pub enum ScanViewWidget {
     WatchList,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcessListWidget {
+    ProcessList,
+    ProcessFilter,
+}
+
 #[derive(Clone, PartialEq)]
 pub enum InputMode {
     Normal,
@@ -93,7 +99,6 @@ pub enum Command {
     GoBack,
 
     // Input mode commands
-    EnterInsertMode(SelectedInput),
     ExitInsertMode,
     AcceptInput,
 
@@ -225,11 +230,11 @@ impl KeyBindings {
         );
         self.process_list_normal.insert(
             KeyPress::new(KeyCode::Tab, KeyModifiers::NONE),
-            Command::EnterInsertMode(SelectedInput::ProcessFilter),
+            Command::NextWidget,
         );
         self.process_list_normal.insert(
             KeyPress::new(KeyCode::BackTab, KeyModifiers::SHIFT),
-            Command::EnterInsertMode(SelectedInput::ProcessFilter),
+            Command::PrevWidget,
         );
 
         // Scan view bindings (normal mode)
@@ -367,13 +372,12 @@ impl KeyBindings {
         match input_mode {
             InputMode::Insert => {
                 // In insert mode, check if it's a character input
-                if let KeyCode::Char(c) = key_event.code {
-                    if key_event.modifiers == KeyModifiers::NONE
-                        || key_event.modifiers == KeyModifiers::SHIFT
+                if let KeyCode::Char(c) = key_event.code
+                    && (key_event.modifiers == KeyModifiers::NONE
+                        || key_event.modifiers == KeyModifiers::SHIFT)
                     {
                         return Some(Command::InsertChar(c));
                     }
-                }
                 self.insert_mode.get(&key_press).cloned()
             }
             InputMode::Normal => match screen {
@@ -493,6 +497,9 @@ pub struct WidgetSelection {
     pub scan_view_widgets: Vec<ScanViewWidget>,
     pub scan_view_selected_widget_index: usize,
     pub scan_view_selected_widget: ScanViewWidget,
+    pub process_list_widgets: Vec<ProcessListWidget>,
+    pub process_list_selected_widget_index: usize,
+    pub process_list_selected_widget: ProcessListWidget,
 }
 
 impl WidgetSelection {
@@ -509,6 +516,12 @@ impl WidgetSelection {
             ],
             scan_view_selected_widget: ScanViewWidget::ValueInput,
             scan_view_selected_widget_index: 1,
+            process_list_widgets: vec![
+                ProcessListWidget::ProcessFilter,
+                ProcessListWidget::ProcessList,
+            ],
+            process_list_selected_widget: ProcessListWidget::ProcessFilter,
+            process_list_selected_widget_index: 0,
         }
     }
 }
@@ -675,6 +688,15 @@ impl App {
         }
     }
 
+    fn enable_process_list_auto_input(&mut self) {
+        match self.ui.selected_widgets.process_list_selected_widget {
+            ProcessListWidget::ProcessFilter => self.insert_mode_for(SelectedInput::ProcessFilter),
+            ProcessListWidget::ProcessList => {
+                self.ui.input_mode = InputMode::Normal;
+            }
+        }
+    }
+
     pub fn select_widget(&mut self, widget: ScanViewWidget) {
         self.ui.selected_widgets.scan_view_selected_widget_index = self
             .ui
@@ -708,25 +730,55 @@ impl App {
     }
 
     pub fn next_widget(&mut self) {
-        self.ui.selected_widgets.scan_view_selected_widget_index =
-            (self.ui.selected_widgets.scan_view_selected_widget_index + 1)
-                % self.ui.selected_widgets.scan_view_widgets.len();
-        self.ui.selected_widgets.scan_view_selected_widget =
-            self.ui.selected_widgets.scan_view_widgets
-                [self.ui.selected_widgets.scan_view_selected_widget_index]
-                .clone();
-        self.enable_auto_input();
+        match self.state.current_screen {
+            CurrentScreen::Scan => {
+                self.ui.selected_widgets.scan_view_selected_widget_index =
+                    (self.ui.selected_widgets.scan_view_selected_widget_index + 1)
+                        % self.ui.selected_widgets.scan_view_widgets.len();
+                self.ui.selected_widgets.scan_view_selected_widget =
+                    self.ui.selected_widgets.scan_view_widgets
+                        [self.ui.selected_widgets.scan_view_selected_widget_index]
+                        .clone();
+                self.enable_auto_input();
+            }
+            CurrentScreen::ProcessList => {
+                self.ui.selected_widgets.process_list_selected_widget_index =
+                    (self.ui.selected_widgets.process_list_selected_widget_index + 1)
+                        % self.ui.selected_widgets.process_list_widgets.len();
+                self.ui.selected_widgets.process_list_selected_widget =
+                    self.ui.selected_widgets.process_list_widgets
+                        [self.ui.selected_widgets.process_list_selected_widget_index]
+                        .clone();
+                self.enable_process_list_auto_input();
+            }
+            _ => {}
+        }
     }
 
     pub fn prev_widget(&mut self) {
-        let len = self.ui.selected_widgets.scan_view_widgets.len();
-        self.ui.selected_widgets.scan_view_selected_widget_index =
-            (self.ui.selected_widgets.scan_view_selected_widget_index + len - 1) % len;
-        self.ui.selected_widgets.scan_view_selected_widget =
-            self.ui.selected_widgets.scan_view_widgets
-                [self.ui.selected_widgets.scan_view_selected_widget_index]
-                .clone();
-        self.enable_auto_input();
+        match self.state.current_screen {
+            CurrentScreen::Scan => {
+                let len = self.ui.selected_widgets.scan_view_widgets.len();
+                self.ui.selected_widgets.scan_view_selected_widget_index =
+                    (self.ui.selected_widgets.scan_view_selected_widget_index + len - 1) % len;
+                self.ui.selected_widgets.scan_view_selected_widget =
+                    self.ui.selected_widgets.scan_view_widgets
+                        [self.ui.selected_widgets.scan_view_selected_widget_index]
+                        .clone();
+                self.enable_auto_input();
+            }
+            CurrentScreen::ProcessList => {
+                let len = self.ui.selected_widgets.process_list_widgets.len();
+                self.ui.selected_widgets.process_list_selected_widget_index =
+                    (self.ui.selected_widgets.process_list_selected_widget_index + len - 1) % len;
+                self.ui.selected_widgets.process_list_selected_widget =
+                    self.ui.selected_widgets.process_list_widgets
+                        [self.ui.selected_widgets.process_list_selected_widget_index]
+                        .clone();
+                self.enable_process_list_auto_input();
+            }
+            _ => {}
+        }
     }
 
     fn select_process(&mut self) {
@@ -848,13 +900,12 @@ impl App {
     fn handle_normal_mode_event(&mut self, key: KeyEvent) {
         // Special handling for 'g' key to detect gg
         if key.code == KeyCode::Char('g') && key.modifiers == KeyModifiers::NONE {
-            if let Some(t) = self.ui.last_g_press_time {
-                if t.elapsed() < Duration::from_millis(500) {
+            if let Some(t) = self.ui.last_g_press_time
+                && t.elapsed() < Duration::from_millis(500) {
                     self.ui.last_g_press_time = None;
                     self.handle_command(Command::MoveToTop);
                     return;
                 }
-            }
             self.ui.last_g_press_time = Some(Instant::now());
             return;
         }
@@ -1045,8 +1096,6 @@ impl App {
             }
             Command::GoBack => self.go_back(),
 
-            // Input mode commands
-            Command::EnterInsertMode(input) => self.insert_mode_for(input),
             Command::ExitInsertMode => {
                 self.ui.input_mode = InputMode::Normal;
                 self.accept_input();
@@ -1056,11 +1105,10 @@ impl App {
                 self.accept_input();
 
                 // Special handling for process filter
-                if let Some(selected_input) = &self.ui.selected_input {
-                    if selected_input == &SelectedInput::ProcessFilter {
+                if let Some(selected_input) = &self.ui.selected_input
+                    && selected_input == &SelectedInput::ProcessFilter {
                         self.select_process();
                     }
-                }
             }
 
             // Character input commands
@@ -1132,8 +1180,7 @@ impl App {
                     && self.ui.selected_widgets.scan_view_selected_widget
                         == ScanViewWidget::ScanResults
                     && let Some(selected) = self.ui.list_states.scan_results.selected()
-                {
-                    if let Some(result) = scan.results.get(selected) {
+                    && let Some(result) = scan.results.get(selected) {
                         scan.add_to_watchlist(result.clone());
                         self.ui.scroll_states.scan_watchlist_vertical = self
                             .ui
@@ -1148,15 +1195,13 @@ impl App {
                         self.app_message =
                             AppMessage::new("Address added to watchlist", AppMessageType::Info);
                     }
-                }
             }
             Command::RemoveFromWatchlist => {
                 if let Some(scan) = &mut self.scan
                     && self.ui.selected_widgets.scan_view_selected_widget
                         == ScanViewWidget::WatchList
                     && let Some(selected) = self.ui.list_states.scan_watchlist.selected()
-                {
-                    if let Some(result) = scan.watchlist.get(selected) {
+                    && let Some(result) = scan.watchlist.get(selected) {
                         scan.remove_from_watchlist(result.address);
                         self.ui.scroll_states.scan_watchlist_vertical = self
                             .ui
@@ -1166,7 +1211,6 @@ impl App {
                         self.app_message =
                             AppMessage::new("Address removed from watchlist", AppMessageType::Info);
                     }
-                }
             }
             Command::EditValue => match self.ui.selected_widgets.scan_view_selected_widget {
                 ScanViewWidget::ValueInput => self.insert_mode_for(SelectedInput::ScanValue),
@@ -1239,13 +1283,18 @@ impl App {
     fn handle_navigate(&mut self, dir: Direction) {
         match self.state.current_screen {
             CurrentScreen::ProcessList => {
-                utils::handle_list_navigation(
-                    dir,
-                    &mut self.ui.list_states.proc_list,
-                    self.proc_list.len(),
-                    Some(&mut self.ui.scroll_states.proc_list_vertical),
-                    &mut self.ui.last_g_press_time,
-                );
+                // Only navigate the list if the ProcessList widget is selected
+                if self.ui.selected_widgets.process_list_selected_widget
+                    == ProcessListWidget::ProcessList
+                {
+                    utils::handle_list_navigation(
+                        dir,
+                        &mut self.ui.list_states.proc_list,
+                        self.proc_list.len(),
+                        Some(&mut self.ui.scroll_states.proc_list_vertical),
+                        &mut self.ui.last_g_press_time,
+                    );
+                }
             }
             CurrentScreen::Scan => {
                 if let Some(scan) = &mut self.scan {
@@ -1345,15 +1394,6 @@ impl App {
             self.key_bindings
                 .get_command(key, &self.state.current_screen, &InputMode::Insert)
         {
-            // Special handling for tab/backtab in non-scan screens
-            if matches!(cmd, Command::NextWidget | Command::PrevWidget)
-                && self.state.current_screen != CurrentScreen::Scan
-            {
-                self.ui.input_mode = InputMode::Normal;
-                self.accept_input();
-                return;
-            }
-
             self.handle_command(cmd);
         }
     }
