@@ -1,10 +1,11 @@
 use memchr::memmem;
+use std::{array::TryFromSliceError, str};
 
 use crate::core::mem::{
     MemoryError, MemoryRegion, get_memory_regions, read_memory_address, write_memory_address,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
     U64,
     I64,
@@ -32,18 +33,32 @@ impl ValueType {
         }
     }
 
-    pub fn get_value_string(&self, value: &[u8]) -> String {
+    pub fn get_value_string(&self, value: &[u8]) -> Result<String, TryFromSliceError> {
         if value.is_empty() {
-            return String::new();
+            return Ok(String::new());
         }
 
-        match self {
-            ValueType::U64 => format!("{}", u64::from_le_bytes(value.try_into().unwrap())),
-            ValueType::I64 => format!("{}", i64::from_le_bytes(value.try_into().unwrap())),
-            ValueType::U32 => format!("{}", u32::from_le_bytes(value.try_into().unwrap())),
-            ValueType::I32 => format!("{}", i32::from_le_bytes(value.try_into().unwrap())),
-            ValueType::String => String::from_utf8(value.to_vec()).unwrap(),
-        }
+        Ok(match self {
+            ValueType::U64 => format!("{}", u64::from_le_bytes(value.try_into()?)),
+            ValueType::I64 => format!("{}", i64::from_le_bytes(value.try_into()?)),
+            ValueType::U32 => format!("{}", u32::from_le_bytes(value.try_into()?)),
+            ValueType::I32 => format!("{}", i32::from_le_bytes(value.try_into()?)),
+            ValueType::String => {
+                let valid_end = str::from_utf8(value)
+                    .map(|_| value.len())
+                    .unwrap_or_else(|e| e.valid_up_to());
+
+                let s = String::from_utf8_lossy(&value[..valid_end]);
+
+                s.chars()
+                    .map(|c| match c {
+                        '\x1b' => String::from("\\x1b"),                       // ANSI escape
+                        c if c.is_control() => format!("\\x{:02x}", c as u32), // other control chars
+                        _ => c.to_string(),
+                    })
+                    .collect::<String>()
+            }
+        })
     }
 }
 
@@ -54,13 +69,15 @@ pub struct ScanResult {
     pub value: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScanError {
     InvalidValue,
     EmptyValue,
     InvalidAddress,
     AddressMismatch,
+    ReadSizeInvalid(usize, usize),
     Memory(MemoryError),
+    TypeMismatch,
 }
 impl std::fmt::Display for ScanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -69,6 +86,10 @@ impl std::fmt::Display for ScanError {
             Self::EmptyValue => write!(f, "Value is reqeuired to be set before scan"),
             Self::InvalidAddress => write!(f, "Invalid address hex"),
             Self::AddressMismatch => write!(f, "Start address should be smaller than end address"),
+            Self::TypeMismatch => write!(f, "Invalid type for value"),
+            Self::ReadSizeInvalid(min, max) => {
+                write!(f, "Read size should be in range {min}-{max}")
+            }
             Self::Memory(e) => write!(f, "{e}"),
         }
     }
@@ -83,8 +104,10 @@ impl ScanResult {
         }
     }
 
-    pub fn get_string(&self) -> String {
-        self.value_type.get_value_string(self.value.as_slice())
+    pub fn get_string(&self) -> Result<String, ScanError> {
+        self.value_type
+            .get_value_string(self.value.as_slice())
+            .map_err(|_| ScanError::TypeMismatch)
     }
 }
 
@@ -95,6 +118,7 @@ pub struct Scan {
     pub value_type: ValueType,
     pub results: Vec<ScanResult>,
     pub watchlist: Vec<ScanResult>,
+    read_size: Option<usize>,
     start_address: Option<u64>,
     end_address: Option<u64>,
     memory_regions: Vec<MemoryRegion>,
@@ -113,6 +137,7 @@ impl Scan {
 
         Ok(Scan {
             pid,
+            read_size: None,
             value,
             start_address,
             end_address,
@@ -123,16 +148,31 @@ impl Scan {
         })
     }
 
-    pub fn set_value_type(&mut self, value_type: ValueType) -> Result<(), ScanError> {
-        let current_value_string = self.value_type.get_value_string(self.value.as_slice());
+    pub fn set_value_type(
+        &mut self,
+        value_type: ValueType,
+        value_str: Option<&str>,
+    ) -> Result<(), ScanError> {
         self.value_type = value_type;
-        if !self.value.is_empty() {
-            self.set_value_from_str(&current_value_string)?;
+        if let Some(value) = value_str {
+            self.set_value_from_str(value)?;
         }
         Ok(())
     }
 
-    pub fn value_from_str(&mut self, value_str: &str) -> Result<Vec<u8>, ScanError> {
+    pub fn set_read_size(&mut self, size: Option<usize>) -> Result<(), ScanError> {
+        if let Some(size) = size {
+            if !(1..=256).contains(&size) {
+                return Err(ScanError::ReadSizeInvalid(1, 256));
+            }
+            self.read_size = Some(size);
+        } else {
+            self.read_size = None;
+        }
+        Ok(())
+    }
+
+    pub fn value_from_str(&self, value_str: &str) -> Result<Vec<u8>, ScanError> {
         Ok(match self.value_type {
             ValueType::U64 => value_str
                 .parse::<u64>()
@@ -215,7 +255,8 @@ impl Scan {
         let mut current_address = region.start as usize;
         let end = region.end as usize;
 
-        let size = self.value.len();
+        let size = self.read_size.unwrap_or(self.value.len());
+
         const BLOCK_SIZE: usize = 0x10000;
 
         while current_address < end {
@@ -235,7 +276,7 @@ impl Scan {
                         ScanResult::new(
                             (current_address + i) as u64,
                             self.value_type,
-                            self.value.clone(),
+                            val[i..i + size].to_vec(),
                         )
                     }));
                 }
@@ -252,12 +293,18 @@ impl Scan {
             return Err(ScanError::EmptyValue);
         }
 
+        self.value_type
+            .get_value_string(&self.value)
+            .map_err(|_| ScanError::TypeMismatch)?;
+
         Ok(())
     }
 
     fn refresh_watchlist(&mut self) -> Result<(), ScanError> {
+        self.check_value()?;
         for result in &mut self.watchlist {
-            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
+            let read_size = self.read_size.unwrap_or(result.value.len());
+            match read_memory_address(self.pid, result.address as usize, read_size) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
@@ -285,8 +332,10 @@ impl Scan {
     }
 
     pub fn refresh(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
+        self.check_value()?;
         for result in &mut self.results {
-            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
+            let read_size = self.read_size.unwrap_or(result.value.len());
+            match read_memory_address(self.pid, result.address as usize, read_size) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
@@ -302,16 +351,19 @@ impl Scan {
     }
 
     pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
+        self.check_value()?;
         let mut new_results = Vec::with_capacity(self.results.len());
         for result in &mut self.results {
-            match read_memory_address(self.pid, result.address as usize, result.value.len()) {
+            let read_size = self.read_size.unwrap_or(result.value.len());
+            match read_memory_address(self.pid, result.address as usize, read_size) {
                 Err(e) => {
                     if let MemoryError::ProcessAttach(_) = e {
                         return Err(ScanError::Memory(e));
                     }
                 }
                 Ok(val) => {
-                    if val == self.value {
+                    // check only prefix
+                    if val[..self.value.len()] == self.value {
                         let mut new_result = result.clone();
                         new_result.value = val;
                         new_results.push(new_result);
@@ -556,6 +608,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -575,6 +628,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -594,6 +648,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -613,6 +668,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -632,6 +688,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -651,6 +708,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -995,6 +1053,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -1021,6 +1080,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -1045,6 +1105,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -1071,6 +1132,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -1097,6 +1159,7 @@ mod test {
             watchlist: vec![],
             start_address: None,
             end_address: None,
+            read_size: None,
             memory_regions: vec![],
         };
 
@@ -1105,6 +1168,102 @@ mod test {
         // Try to remove from empty watchlist
         scan.remove_from_watchlist(result.address);
         assert_eq!(scan.watchlist.len(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_string_search_without_read_size() {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let proc = Command::new("./target/debug/examples/simple_ctf_task")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut proc = crate::core::utils::ChildGuard(proc);
+        let stdout = proc.0.stdout.take().expect("child had no stdout");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+
+        let mut scan = Scan::new(
+            proc.0.id(),
+            "FLAG{".as_bytes().to_vec(),
+            ValueType::String,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let results = scan.init().unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "Should find exactly one occurrence of 'FLAG{{'"
+        );
+        let result = &results[0];
+
+        // Verify that the value contains "FLAG{" prefix
+        let value_str = String::from_utf8(result.value.clone()).unwrap();
+        assert!(
+            value_str.starts_with("FLAG{"),
+            "Result should start with 'FLAG{{'"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_string_search_with_read_size() {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let proc = Command::new("./target/debug/examples/simple_ctf_task")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut proc = crate::core::utils::ChildGuard(proc);
+        let stdout = proc.0.stdout.take().expect("child had no stdout");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        reader.read_line(&mut line).unwrap();
+
+        let mut scan = Scan::new(
+            proc.0.id(),
+            "FLAG{".as_bytes().to_vec(),
+            ValueType::String,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Set read_size to 15 to capture the full flag
+        scan.set_read_size(Some(15)).unwrap();
+
+        let results = scan.init().unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "Should find exactly one occurrence of 'FLAG{{'"
+        );
+        let result = &results[0];
+
+        // Verify that the value is exactly "FLAG{F4K3_FL4G}"
+        let value_str = String::from_utf8(result.value.clone()).unwrap();
+        assert_eq!(
+            value_str, "FLAG{F4K3_FL4G}",
+            "Result should be 'FLAG{{F4K3_FL4G}}'"
+        );
+        assert_eq!(result.value.len(), 15, "Result should be 15 bytes long");
     }
 
     #[test]

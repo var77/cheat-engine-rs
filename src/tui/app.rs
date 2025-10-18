@@ -34,13 +34,15 @@ pub enum SelectedInput {
     StartAddress,
     EndAddress,
     ResultValue,
+    ReadSize,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScanViewWidget {
     ScanResults,
     ValueInput,
     ValueTypeSelect,
+    ReadSize,
     StartAddressInput,
     EndAddressInput,
     AppMessage,
@@ -112,6 +114,7 @@ pub struct App {
     pub app_action: Option<AppAction>,
     pub scan_results_list_state: ListState,
     pub scan_watchlist_list_state: ListState,
+    pub read_size_input: String,
 }
 
 impl App {
@@ -161,6 +164,7 @@ impl App {
             scan_results_list_state: ListState::default(),
             scan_watchlist_list_state: ListState::default(),
             app_action: None,
+            read_size_input: String::new(),
         }
     }
 
@@ -251,6 +255,7 @@ impl App {
             ScanViewWidget::ValueInput => self.insert_mode_for(SelectedInput::ScanValue),
             ScanViewWidget::StartAddressInput => self.insert_mode_for(SelectedInput::StartAddress),
             ScanViewWidget::EndAddressInput => self.insert_mode_for(SelectedInput::EndAddress),
+            ScanViewWidget::ReadSize => self.insert_mode_for(SelectedInput::ReadSize),
             _ => {
                 self.input_mode = InputMode::Normal;
             }
@@ -286,6 +291,7 @@ impl App {
             SelectedInput::StartAddress => self.start_address_input.len(),
             SelectedInput::EndAddress => self.end_address_input.len(),
             SelectedInput::ResultValue => self.result_value_input.len(),
+            SelectedInput::ReadSize => self.read_size_input.len(),
         };
         self.character_index = input_len;
         self.selected_input = Some(selected_input);
@@ -346,7 +352,21 @@ impl App {
         };
     }
 
+    fn check_value_before_scan(&mut self) -> bool {
+        if let Some(scan) = &self.scan
+            && let Err(e) = scan.value_from_str(&self.value_input) {
+                self.app_message = AppMessage::new(&format!("{e}"), AppMessageType::Error);
+                self.select_widget(ScanViewWidget::ValueInput);
+                return false;
+            }
+
+        true
+    }
+
     fn new_scan(&mut self) {
+        if !self.check_value_before_scan() {
+            return;
+        }
         match &mut self.scan {
             None => {}
             Some(scan) => match scan.init() {
@@ -376,6 +396,9 @@ impl App {
     }
 
     fn next_scan(&mut self) {
+        if !self.check_value_before_scan() {
+            return;
+        }
         match &mut self.scan {
             None => {}
             Some(scan) => match scan.next_scan() {
@@ -405,6 +428,9 @@ impl App {
     }
 
     fn refresh_scan(&mut self) {
+        if !self.check_value_before_scan() {
+            return;
+        }
         match &mut self.scan {
             None => {}
             Some(scan) => {
@@ -485,18 +511,40 @@ impl App {
                     );
                     match key_code {
                         KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
-                            if let Some(selected) = self.value_type_state.selected()
-                                && let Err(e) = scan.set_value_type(self.value_types[selected])
-                                && let ScanError::InvalidValue = e
-                            {
-                                self.app_message = AppMessage::new(
-                                    &format!(
-                                        "Invalid value: {:.10} for type: {}",
-                                        self.result_value_input,
-                                        scan.value_type.get_string(),
-                                    ),
-                                    AppMessageType::Error,
-                                );
+                            if let Some(selected) = self.value_type_state.selected() {
+                                if let Err(ScanError::InvalidValue | ScanError::TypeMismatch) = scan.set_value_type(
+                                    self.value_types[selected],
+                                    Some(&self.value_input),
+                                ) {
+                                    self.app_message = AppMessage::new(
+                                        &format!(
+                                            "Invalid value: {:.10} for type: {}",
+                                            self.result_value_input,
+                                            scan.value_type.get_string(),
+                                        ),
+                                        AppMessageType::Error,
+                                    );
+                                }
+
+                                // when string type is selected ReadSize option should be
+                                // available
+                                if scan.value_type == ValueType::String {
+                                    let idx = self
+                                        .scan_view_widgets
+                                        .iter()
+                                        .position(|x| *x == ScanViewWidget::ValueTypeSelect)
+                                        .unwrap();
+                                    self.scan_view_widgets
+                                        .insert(idx + 1, ScanViewWidget::ReadSize);
+                                } else if let Some(idx) = self
+                                    .scan_view_widgets
+                                    .iter()
+                                    .position(|x| *x == ScanViewWidget::ReadSize)
+                                {
+                                    self.scan_view_widgets.remove(idx);
+                                }
+
+                                self.app_message = AppMessage::default();
                             }
                         }
                         _ => {}
@@ -567,16 +615,23 @@ impl App {
                         list.get(selected_index).cloned()
                     });
 
-                    if self.selected_value.is_some() {
-                        self.result_value_input =
-                            self.selected_value.as_ref().unwrap().get_string();
-                        self.insert_mode_for(SelectedInput::ResultValue);
-                        self.go_to(CurrentScreen::ValueEditing);
-                    } else {
-                        self.app_message = AppMessage::new(
-                            "No result selected for editing.",
-                            AppMessageType::Info,
-                        );
+                    match self.selected_value.as_ref().unwrap().get_string() {
+                        Err(e) => {
+                            self.app_message =
+                                AppMessage::new(&format!("{e}"), AppMessageType::Info);
+                        }
+                        Ok(result_value) => {
+                            if self.selected_value.is_some() {
+                                self.result_value_input = result_value;
+                                self.insert_mode_for(SelectedInput::ResultValue);
+                                self.go_to(CurrentScreen::ValueEditing);
+                            } else {
+                                self.app_message = AppMessage::new(
+                                    "No result selected for editing.",
+                                    AppMessageType::Info,
+                                );
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -671,8 +726,34 @@ impl App {
                             ),
                             AppMessageType::Error,
                         );
+                        self.insert_mode_for(SelectedInput::ScanValue);
                     } else {
                         self.app_message = AppMessage::default();
+                    }
+                }
+                SelectedInput::ReadSize => {
+                    if self.read_size_input.is_empty() {
+                        scan.set_read_size(None).unwrap();
+                        return;
+                    }
+
+                    match self.read_size_input.parse::<usize>() {
+                        Err(_) => {
+                            self.app_message = AppMessage::new(
+                                "Read size should be integer",
+                                AppMessageType::Error,
+                            );
+                            self.insert_mode_for(SelectedInput::ReadSize);
+                        }
+                        Ok(size) => {
+                            if let Err(e) = scan.set_read_size(Some(size)) {
+                                self.app_message =
+                                    AppMessage::new(&format!("{e}",), AppMessageType::Error);
+                                self.insert_mode_for(SelectedInput::ReadSize);
+                            } else {
+                                self.app_message = AppMessage::default();
+                            }
+                        }
                     }
                 }
                 SelectedInput::StartAddress => {
@@ -698,6 +779,7 @@ impl App {
                             }
                             _ => {}
                         }
+                        self.insert_mode_for(SelectedInput::StartAddress);
                     } else {
                         self.app_message = AppMessage::default();
                     }
@@ -725,6 +807,7 @@ impl App {
                             }
                             _ => {}
                         }
+                        self.insert_mode_for(SelectedInput::EndAddress);
                     } else {
                         self.app_message = AppMessage::default();
                     }
@@ -755,8 +838,8 @@ impl App {
         }
 
         if self.selected_input.is_none() || key.code == KeyCode::Esc || key.code == KeyCode::Enter {
-            self.accept_input();
             self.input_mode = InputMode::Normal;
+            self.accept_input();
             return;
         }
 
@@ -767,6 +850,7 @@ impl App {
                 SelectedInput::StartAddress => &mut self.start_address_input,
                 SelectedInput::EndAddress => &mut self.end_address_input,
                 SelectedInput::ResultValue => &mut self.result_value_input,
+                SelectedInput::ReadSize => &mut self.read_size_input,
             },
             None => {
                 return;

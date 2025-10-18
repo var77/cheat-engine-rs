@@ -9,8 +9,9 @@ use ratatui::{
     },
 };
 
-use crate::tui::app::{
-    App, AppMessageType, CurrentScreen, InputMode, ScanViewWidget, SelectedInput,
+use crate::{
+    core::scan::ValueType,
+    tui::app::{App, AppMessageType, CurrentScreen, InputMode, ScanViewWidget, SelectedInput},
 };
 
 pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
@@ -142,7 +143,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
-                result.get_string()
+                result.get_string().unwrap_or("TypeMismatch".to_owned())
             )))
             .style(Style::new().fg(Color::Green))
         })
@@ -179,7 +180,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
-                result.get_string()
+                result.get_string().unwrap_or("TypeMismatch".to_owned())
             )))
             .style(Style::new().fg(Color::Green))
         })
@@ -250,7 +251,25 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         )
         .highlight_symbol(">> ");
 
-    frame.render_stateful_widget(list, options_view_chunks[1], &mut app.value_type_state);
+    let mut read_size_box_x = 0;
+    if let Some(scan) = &app.scan
+        && scan.value_type == ValueType::String
+    {
+        let value_type_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+            .split(options_view_chunks[1]);
+
+        frame.render_stateful_widget(list, value_type_chunks[0], &mut app.value_type_state);
+
+        let read_size_input = Paragraph::new(app.read_size_input.as_str())
+            .style(get_active_widget_style(app, ScanViewWidget::ReadSize))
+            .block(Block::bordered().title("Read Size"));
+        read_size_box_x = value_type_chunks[1].x;
+        frame.render_widget(read_size_input, value_type_chunks[1]);
+    } else {
+        frame.render_stateful_widget(list, options_view_chunks[1], &mut app.value_type_state);
+    }
     //
 
     let start_address_input = Paragraph::new(app.start_address_input.as_str())
@@ -277,13 +296,17 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     match app.input_mode {
         InputMode::Normal => {}
         InputMode::Insert => {
-            let x = options_rect.x + app.character_index as u16 + 1;
+            let mut x = options_rect.x + app.character_index as u16 + 1;
             let mut y = 0;
             match &app.selected_input {
                 None => {}
                 Some(selected_input) => match selected_input {
                     SelectedInput::ScanValue => {
                         y = options_view_chunks[0].y + 1;
+                    }
+                    SelectedInput::ReadSize => {
+                        x = read_size_box_x + app.character_index as u16 + 1;
+                        y = options_view_chunks[1].y + 1;
                     }
                     SelectedInput::StartAddress => {
                         y = options_view_chunks[2].y + 1;
