@@ -8,6 +8,12 @@ A minimal CheatEngine implementation built with Rust and a terminal UI.
 
 [![Demo](assets/demo.gif)](https://asciinema.org/a/QwTnsAF9VzyFUBYLqTVLvAf9S)
 
+### CTF Reverse Engineering Use Case
+
+Great for CTF challenges! Search for strings by prefix and read larger memory regions:
+
+[![CTF Demo](assets/demo-ctf.gif)](https://asciinema.org/a/qWf3TNE1lQAyB1ey9s73WVuAt)
+
 ## What is this?
 
 This is a simple memory scanner that lets you find and change values in running programs. Think of it like the original Cheat Engine but way more basic and running in your terminal.
@@ -15,6 +21,7 @@ This is a simple memory scanner that lets you find and change values in running 
 ## What it can do
 
 - Scan memory for 32-bit and 64-bit numbers and strings
+- String scanning with prefix matching - search by prefix and read a specified size (useful for CTF challenges when you only know part of a string)
 - Filter results by comparing old and new values
 - Watch memory addresses in real-time
 - Terminal-based UI using keyboard shortcuts
@@ -22,9 +29,7 @@ This is a simple memory scanner that lets you find and change values in running 
 ## Supported Systems
 
 - **macOS** (tested on Apple Silicon with macOS Tahoe)
-- **Linux** (basic support)
-
-**Note:** This has only been tested on Apple Silicon Macs running macOS Tahoe.
+- **Linux** (tested on Ubuntu 20.04)
 
 ## Requirements
 
