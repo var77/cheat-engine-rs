@@ -57,7 +57,7 @@ pub mod cursor {
     }
 
     pub fn reset_cursor(app: &mut crate::tui::App) {
-        app.character_index = 0;
+        app.ui.character_index = 0;
     }
 }
 

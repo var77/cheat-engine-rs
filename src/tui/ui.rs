@@ -41,34 +41,34 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
         .block(
             Block::bordered()
                 .title("Process List")
-                .style(match app.input_mode {
+                .style(match app.ui.input_mode {
                     InputMode::Normal => Style::default().fg(Color::Yellow),
                     InputMode::Insert => Style::default(),
                 }),
         );
-    frame.render_stateful_widget(list_widget, chunks[0], &mut app.proc_list_state);
+    frame.render_stateful_widget(list_widget, chunks[0], &mut app.ui.list_states.proc_list);
 
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓")),
         chunks[0],
-        &mut app.proc_list_vertical_scroll_state,
+        &mut app.ui.scroll_states.proc_list_vertical,
     );
 
     // Render footer
-    let input = Paragraph::new(app.proc_filter_input.as_str())
-        .style(match app.input_mode {
+    let input = Paragraph::new(app.ui.input_buffers.process_filter.as_str())
+        .style(match app.ui.input_mode {
             InputMode::Normal => Style::default(),
             InputMode::Insert => Style::default().fg(Color::Yellow),
         })
         .block(Block::bordered().title("Filter"));
     frame.render_widget(input, chunks[1]);
 
-    match app.input_mode {
+    match app.ui.input_mode {
         InputMode::Normal => {}
         InputMode::Insert => frame.set_cursor_position(Position::new(
-            chunks[1].x + app.character_index as u16 + 1,
+            chunks[1].x + app.ui.character_index as u16 + 1,
             chunks[1].y + 1,
         )),
     }
@@ -91,7 +91,7 @@ pub fn draw_process_list(frame: &mut Frame, app: &mut App) {
 }
 
 fn get_active_widget_style(app: &App, widget: ScanViewWidget) -> Style {
-    if app.scan_view_selected_widget == widget {
+    if app.ui.selected_widgets.scan_view_selected_widget == widget {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
@@ -104,7 +104,7 @@ fn get_message_style(app: &App) -> Style {
         AppMessageType::Error => Style::default().bg(Color::Red),
     };
 
-    if app.scan_view_selected_widget == ScanViewWidget::AppMessage {
+    if app.ui.selected_widgets.scan_view_selected_widget == ScanViewWidget::AppMessage {
         style = style.fg(Color::Yellow);
     }
     style
@@ -162,7 +162,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(
         result_list_widget,
         scan_results_rect,
-        &mut app.scan_results_list_state,
+        &mut app.ui.list_states.scan_results,
     );
 
     frame.render_stateful_widget(
@@ -170,7 +170,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓")),
         scan_results_rect,
-        &mut app.scan_results_vertical_scroll_state,
+        &mut app.ui.scroll_states.scan_results_vertical,
     );
 
     // Watchlist
@@ -199,7 +199,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(
         result_list_widget,
         watchlist_rect,
-        &mut app.scan_watchlist_list_state,
+        &mut app.ui.list_states.scan_watchlist,
     );
 
     frame.render_stateful_widget(
@@ -207,7 +207,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓")),
         watchlist_rect,
-        &mut app.scan_watchlist_vertical_scroll_state,
+        &mut app.ui.scroll_states.scan_watchlist_vertical,
     );
     //
     // Render Options
@@ -222,7 +222,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         ])
         .split(options_rect);
 
-    let value_input = Paragraph::new(app.value_input.as_str())
+    let value_input = Paragraph::new(app.ui.input_buffers.scan_value.as_str())
         .style(get_active_widget_style(app, ScanViewWidget::ValueInput))
         .block(Block::bordered().title("Value"));
     frame.render_widget(value_input, options_view_chunks[0]);
@@ -260,19 +260,19 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(options_view_chunks[1]);
 
-        frame.render_stateful_widget(list, value_type_chunks[0], &mut app.value_type_state);
+        frame.render_stateful_widget(list, value_type_chunks[0], &mut app.ui.list_states.value_type);
 
-        let read_size_input = Paragraph::new(app.read_size_input.as_str())
+        let read_size_input = Paragraph::new(app.ui.input_buffers.read_size.as_str())
             .style(get_active_widget_style(app, ScanViewWidget::ReadSize))
             .block(Block::bordered().title("Read Size"));
         read_size_box_x = value_type_chunks[1].x;
         frame.render_widget(read_size_input, value_type_chunks[1]);
     } else {
-        frame.render_stateful_widget(list, options_view_chunks[1], &mut app.value_type_state);
+        frame.render_stateful_widget(list, options_view_chunks[1], &mut app.ui.list_states.value_type);
     }
     //
 
-    let start_address_input = Paragraph::new(app.start_address_input.as_str())
+    let start_address_input = Paragraph::new(app.ui.input_buffers.start_address.as_str())
         .style(get_active_widget_style(
             app,
             ScanViewWidget::StartAddressInput,
@@ -280,7 +280,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         .block(Block::bordered().title("Start Address - hex (optional)"));
     frame.render_widget(start_address_input, options_view_chunks[2]);
 
-    let end_address_input = Paragraph::new(app.end_address_input.as_str())
+    let end_address_input = Paragraph::new(app.ui.input_buffers.end_address.as_str())
         .style(get_active_widget_style(
             app,
             ScanViewWidget::EndAddressInput,
@@ -293,19 +293,19 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         .block(Block::bordered().title("App Message"));
     frame.render_widget(msg_box, options_view_chunks[4]);
 
-    match app.input_mode {
+    match app.ui.input_mode {
         InputMode::Normal => {}
         InputMode::Insert => {
-            let mut x = options_rect.x + app.character_index as u16 + 1;
+            let mut x = options_rect.x + app.ui.character_index as u16 + 1;
             let mut y = 0;
-            match &app.selected_input {
+            match &app.ui.selected_input {
                 None => {}
                 Some(selected_input) => match selected_input {
                     SelectedInput::ScanValue => {
                         y = options_view_chunks[0].y + 1;
                     }
                     SelectedInput::ReadSize => {
-                        x = read_size_box_x + app.character_index as u16 + 1;
+                        x = read_size_box_x + app.ui.character_index as u16 + 1;
                         y = options_view_chunks[1].y + 1;
                     }
                     SelectedInput::StartAddress => {
@@ -325,7 +325,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     // Help text
     let mut help_text_items = vec![Span::from("Tab/Shift+Tab: Change pane | ").fg(Color::Green)];
 
-    match app.scan_view_selected_widget {
+    match app.ui.selected_widgets.scan_view_selected_widget {
         ScanViewWidget::ScanResults
         | ScanViewWidget::WatchList
         | ScanViewWidget::ValueTypeSelect => {
@@ -348,15 +348,15 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         ]);
     }
 
-    if app.scan_view_selected_widget == ScanViewWidget::ScanResults {
+    if app.ui.selected_widgets.scan_view_selected_widget == ScanViewWidget::ScanResults {
         help_text_items.extend(vec![Span::from("w: Add to watchlist | ").fg(Color::Green)]);
     }
 
-    if app.scan_view_selected_widget == ScanViewWidget::WatchList {
+    if app.ui.selected_widgets.scan_view_selected_widget == ScanViewWidget::WatchList {
         help_text_items.push(Span::from("d: Remove from watchlist | ").fg(Color::Green));
     }
 
-    match app.scan_view_selected_widget {
+    match app.ui.selected_widgets.scan_view_selected_widget {
         ScanViewWidget::ScanResults | ScanViewWidget::WatchList => {
             help_text_items.extend(vec![
                 Span::from("u/Enter: Update Value | ").fg(Color::Green),
@@ -414,19 +414,19 @@ pub fn draw_value_editing_screen(frame: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
-    let value_input = Paragraph::new(app.result_value_input.as_str())
+    let value_input = Paragraph::new(app.ui.input_buffers.result_value.as_str())
         .style(Style::default().fg(Color::Yellow))
         .block(popup_block);
     let area = centered_rect(50, 30, frame.area());
     frame.set_cursor_position(Position::new(
-        area.x + app.character_index as u16 + 1,
+        area.x + app.ui.character_index as u16 + 1,
         area.y + 1,
     ));
     frame.render_widget(value_input, area);
 }
 
 pub fn draw_ui(frame: &mut Frame, app: &mut App) {
-    match app.current_screen {
+    match app.state.current_screen {
         CurrentScreen::ProcessList => {
             draw_process_list(frame, app);
         }
