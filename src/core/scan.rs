@@ -161,9 +161,12 @@ impl Scan {
     }
 
     pub fn set_read_size(&mut self, size: Option<usize>) -> Result<(), ScanError> {
+        const MAX_READ_SIZE: usize = 256;
+        const MIN_READ_SIZE: usize = 1;
+
         if let Some(size) = size {
-            if !(1..=256).contains(&size) {
-                return Err(ScanError::ReadSizeInvalid(1, 256));
+            if !(MIN_READ_SIZE..=MAX_READ_SIZE).contains(&size) {
+                return Err(ScanError::ReadSizeInvalid(MIN_READ_SIZE, MAX_READ_SIZE));
             }
             self.read_size = Some(size);
         } else {
@@ -273,10 +276,12 @@ impl Scan {
                 }
                 Ok(val) => {
                     results.extend(memmem::find_iter(&val, &self.value).map(|i| {
+                        // Take all available data from position i, up to size bytes
+                        let end = std::cmp::min(i + size, val.len());
                         ScanResult::new(
                             (current_address + i) as u64,
                             self.value_type,
-                            val[i..i + size].to_vec(),
+                            val[i..end].to_vec(),
                         )
                     }));
                 }
@@ -352,7 +357,7 @@ impl Scan {
 
     pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         self.check_value()?;
-        let mut new_results = Vec::with_capacity(self.results.len());
+        let mut new_results = Vec::with_capacity(self.results.len() / 2);
         for result in &mut self.results {
             let read_size = self.read_size.unwrap_or(result.value.len());
             match read_memory_address(self.pid, result.address as usize, read_size) {
@@ -362,8 +367,8 @@ impl Scan {
                     }
                 }
                 Ok(val) => {
-                    // check only prefix
-                    if val[..self.value.len()] == self.value {
+                    // check only prefix - ensure bounds are valid
+                    if val.len() >= self.value.len() && val[..self.value.len()] == self.value {
                         let mut new_result = result.clone();
                         new_result.value = val;
                         new_results.push(new_result);

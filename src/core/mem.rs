@@ -5,6 +5,7 @@ use std::fmt::Display;
 pub enum MemoryError {
     NoPermission(i32),
     MemRead(i32),
+    MemWrite(i32),
     ProcessAttach(i32),
 }
 
@@ -13,6 +14,7 @@ impl Display for MemoryError {
         match self {
             Self::NoPermission(code) => write!(f, "Permission Denied: OS Error ({code})"),
             Self::MemRead(code) => write!(f, "Could not read memory: OS Error ({code})"),
+            Self::MemWrite(code) => write!(f, "Could not write memory: OS Error ({code})"),
             Self::ProcessAttach(code) => {
                 write!(f, "Could not attach to process: OS Error ({code})")
             }
@@ -152,10 +154,11 @@ pub fn get_memory_regions(
         let perms = parts.next().unwrap_or("");
 
         let mut range_split = range.split('-');
-        let start_str = range_split.next().unwrap();
-        let end_str = range_split.next().unwrap();
-        let start_addr_val = u64::from_str_radix(start_str, 16).unwrap();
-        let end_addr_val = u64::from_str_radix(end_str, 16).unwrap();
+        let start_str = range_split.next().ok_or_else(|| MemoryError::MemRead(0))?;
+        let end_str = range_split.next().ok_or_else(|| MemoryError::MemRead(0))?;
+        let start_addr_val =
+            u64::from_str_radix(start_str, 16).map_err(|_| MemoryError::MemRead(0))?;
+        let end_addr_val = u64::from_str_radix(end_str, 16).map_err(|_| MemoryError::MemRead(0))?;
 
         // Filter by address range
         if end_addr_val < start_addr || start_addr_val > end_addr {
@@ -177,34 +180,26 @@ pub fn get_memory_regions(
 }
 
 pub fn read_memory_address(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>, MemoryError> {
-    let handle = (pid as Pid).try_into_process_handle();
-
-    if let Err(e) = handle {
-        return Err(MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)));
-    }
-
-    let handle = handle.unwrap();
+    let handle = (pid as Pid)
+        .try_into_process_handle()
+        .map_err(|e| MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)))?;
 
     let mut result = vec![0; size];
-    if let Err(e) = handle.copy_address(addr, &mut result) {
-        return Err(MemoryError::MemRead(e.raw_os_error().unwrap_or(-1)));
-    }
+    handle
+        .copy_address(addr, &mut result)
+        .map_err(|e| MemoryError::MemRead(e.raw_os_error().unwrap_or(-1)))?;
 
     Ok(result)
 }
 
 pub fn write_memory_address(pid: u32, addr: usize, value: &[u8]) -> Result<(), MemoryError> {
-    let handle = (pid as Pid).try_into_process_handle();
+    let handle = (pid as Pid)
+        .try_into_process_handle()
+        .map_err(|e| MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)))?;
 
-    if let Err(e) = handle {
-        return Err(MemoryError::ProcessAttach(e.raw_os_error().unwrap_or(-1)));
-    }
-
-    let handle = handle.unwrap();
-
-    if let Err(e) = handle.put_address(addr, value) {
-        return Err(MemoryError::MemRead(e.raw_os_error().unwrap_or(-1)));
-    }
+    handle
+        .put_address(addr, value)
+        .map_err(|e| MemoryError::MemWrite(e.raw_os_error().unwrap_or(-1)))?;
 
     Ok(())
 }
