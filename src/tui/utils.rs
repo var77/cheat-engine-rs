@@ -1,9 +1,8 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use ratatui::{
-    crossterm::event::KeyCode,
-    widgets::{ListState, ScrollbarState},
-};
+use ratatui::widgets::{ListState, ScrollbarState};
+
+use super::app::Direction;
 
 pub mod cursor {
     pub fn move_cursor_left(input: &str, char_index: &mut usize) {
@@ -61,15 +60,16 @@ pub mod cursor {
     }
 }
 
-pub fn handle_list_events(
-    key_code: KeyCode,
+// New function using Direction enum for command pattern
+pub fn handle_list_navigation(
+    dir: Direction,
     list_state: &mut ListState,
     list_size: usize,
     scroll_state: Option<&mut ScrollbarState>,
-    last_g_press_time: &mut Option<Instant>,
+    _last_g_press_time: &mut Option<Instant>,
 ) {
-    match key_code {
-        KeyCode::Char('j') | KeyCode::Down => {
+    match dir {
+        Direction::Down => {
             if let Some(selected) = list_state.selected() {
                 let next = if selected < list_size - 1 {
                     selected + 1
@@ -82,7 +82,7 @@ pub fn handle_list_events(
                 list_state.select(Some(next));
             }
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        Direction::Up => {
             if let Some(selected) = list_state.selected() {
                 let next = if selected > 0 {
                     selected - 1
@@ -95,27 +95,19 @@ pub fn handle_list_events(
                 }
             }
         }
-        KeyCode::Char('G') => {
+        Direction::Bottom => {
             let next = list_size - 1;
             if let Some(scroll_state) = scroll_state {
                 *scroll_state = scroll_state.position(next);
             }
             list_state.select(Some(next));
         }
-        KeyCode::Char('g') => {
-            if let Some(t) = last_g_press_time
-                && t.elapsed() < Duration::from_millis(500)
-            {
-                *last_g_press_time = None;
-                let next = 0;
-                if let Some(scroll_state) = scroll_state {
-                    *scroll_state = scroll_state.position(next);
-                }
-                list_state.select(Some(next));
-                return;
+        Direction::Top => {
+            let next = 0;
+            if let Some(scroll_state) = scroll_state {
+                *scroll_state = scroll_state.position(next);
             }
-            *last_g_press_time = Some(Instant::now());
+            list_state.select(Some(next));
         }
-        _ => {}
     }
 }
