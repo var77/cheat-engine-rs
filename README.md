@@ -91,11 +91,8 @@ CARGO_TARGET_DIR=/tmp/target-root cargo test -- --include-ignored
 ## TODO
 
 - [ ] Windows support
-- [ ] More data types (floats, doubles, etc.)
+- [ ] More data types (floats, doubles)
 - [ ] Separate UI and worker threads
-- [ ] Speed up initial scan with parallel processing (rayon)
-- [ ] Pointer scanning
-- [ ] Save/load scan results
 
 ## Why root?
 

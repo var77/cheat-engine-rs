@@ -1,4 +1,5 @@
 use memchr::memmem;
+use rayon::prelude::*;
 use std::{array::TryFromSliceError, str};
 
 use crate::core::mem::{
@@ -292,44 +293,62 @@ impl Scan {
     }
 
     fn scan_region(&self, region: &MemoryRegion) -> Result<Vec<ScanResult>, MemoryError> {
-        let mut results: Vec<ScanResult> = Vec::new();
-        let mut current_address = region.start as usize;
+        let start = region.start as usize;
         let end = region.end as usize;
-
         let size = self.read_size.unwrap_or(self.value.len());
 
         const BLOCK_SIZE: usize = 0x10000;
 
-        while current_address < end {
-            let to_read = std::cmp::min(BLOCK_SIZE, end - current_address);
-            if to_read < size {
-                break;
+        // Validate region with a single byte read to catch ProcessAttach errors early
+        if let Err(e) = read_memory_address(self.pid, start, 1)
+            && let MemoryError::ProcessAttach(_) = e {
+                return Err(e);
             }
 
-            match read_memory_address(self.pid, current_address, to_read) {
-                Err(e) => {
-                    if let MemoryError::ProcessAttach(_) = e {
-                        return Err(e);
+        // Generate all block addresses to scan
+        let block_addresses: Vec<usize> = {
+            let mut addresses = Vec::new();
+            let mut current_address = start;
+            while current_address < end {
+                let to_read = std::cmp::min(BLOCK_SIZE, end - current_address);
+                if to_read < size {
+                    break;
+                }
+                addresses.push(current_address);
+                current_address += to_read - (size - 1);
+            }
+            addresses
+        };
+
+        // Parallel scan of all blocks
+        let results: Vec<Vec<ScanResult>> = block_addresses
+            .par_iter()
+            .filter_map(|&current_address| {
+                let to_read = std::cmp::min(BLOCK_SIZE, end - current_address);
+
+                match read_memory_address(self.pid, current_address, to_read) {
+                    Err(_) => None, // Ignore all errors during parallel scan
+                    Ok(val) => {
+                        let block_results: Vec<ScanResult> = memmem::find_iter(&val, &self.value)
+                            .map(|i| {
+                                // Take all available data from position i, up to size bytes
+                                let end_offset = std::cmp::min(i + size, val.len());
+                                ScanResult::new(
+                                    (current_address + i) as u64,
+                                    self.value_type,
+                                    val[i..end_offset].to_vec(),
+                                    region.perms.clone(),
+                                )
+                            })
+                            .collect();
+                        Some(block_results)
                     }
                 }
-                Ok(val) => {
-                    results.extend(memmem::find_iter(&val, &self.value).map(|i| {
-                        // Take all available data from position i, up to size bytes
-                        let end = std::cmp::min(i + size, val.len());
-                        ScanResult::new(
-                            (current_address + i) as u64,
-                            self.value_type,
-                            val[i..end].to_vec(),
-                            region.perms.clone(),
-                        )
-                    }));
-                }
-            }
+            })
+            .collect();
 
-            current_address += to_read - (size - 1);
-        }
-
-        Ok(results)
+        // Flatten results
+        Ok(results.into_iter().flatten().collect())
     }
 
     fn check_value(&self) -> Result<(), ScanError> {
@@ -346,33 +365,54 @@ impl Scan {
 
     fn refresh_watchlist(&mut self) -> Result<(), ScanError> {
         self.check_value()?;
-        for result in &mut self.watchlist {
-            let read_size = self.read_size.unwrap_or(result.value.len());
-            match read_memory_address(self.pid, result.address as usize, read_size) {
-                Err(e) => {
-                    if let MemoryError::ProcessAttach(_) = e {
-                        return Err(ScanError::Memory(e));
-                    }
-                }
-                Ok(val) => {
-                    result.value_type = self.value_type;
-                    result.value = val
-                }
-            }
+
+        if self.watchlist.is_empty() {
+            return Ok(());
         }
 
+        // Early validation with single read to catch ProcessAttach errors
+        if let Some(first) = self.watchlist.first() {
+            let read_size = self.read_size.unwrap_or(first.value.len());
+            if let Err(e) = read_memory_address(self.pid, first.address as usize, read_size)
+                && let MemoryError::ProcessAttach(_) = e {
+                    return Err(ScanError::Memory(e));
+                }
+        }
+
+        // Parallel refresh
+        let updated_watchlist: Vec<ScanResult> = self
+            .watchlist
+            .par_iter()
+            .filter_map(|result| {
+                let read_size = self.read_size.unwrap_or(result.value.len());
+                match read_memory_address(self.pid, result.address as usize, read_size) {
+                    Err(_) => None, // Ignore errors during parallel scan
+                    Ok(val) => {
+                        let mut updated = result.clone();
+                        updated.value_type = self.value_type;
+                        updated.value = val;
+                        Some(updated)
+                    }
+                }
+            })
+            .collect();
+
+        self.watchlist = updated_watchlist;
         Ok(())
     }
 
     pub fn init(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         self.check_value()?;
-        let mut results: Vec<ScanResult> = Vec::new();
 
-        for region in &self.memory_regions {
-            results.extend(self.scan_region(region).map_err(ScanError::Memory)?);
-        }
+        // Parallel scan across memory regions
+        let results: Result<Vec<Vec<ScanResult>>, MemoryError> = self
+            .memory_regions
+            .par_iter()
+            .map(|region| self.scan_region(region))
+            .collect();
 
-        self.results = results;
+        let results = results.map_err(ScanError::Memory)?;
+        self.results = results.into_iter().flatten().collect();
         self.refresh_watchlist()?;
 
         Ok(&self.results)
@@ -380,21 +420,40 @@ impl Scan {
 
     pub fn refresh(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         self.check_value()?;
-        for result in &mut self.results {
-            let read_size = self.read_size.unwrap_or(result.value.len());
-            match read_memory_address(self.pid, result.address as usize, read_size) {
-                Err(e) => {
-                    if let MemoryError::ProcessAttach(_) = e {
-                        return Err(ScanError::Memory(e));
-                    }
-                }
-                Ok(val) => {
-                    result.value_type = self.value_type;
-                    result.value = val;
-                }
-            }
+
+        if self.results.is_empty() {
+            self.refresh_watchlist()?;
+            return Ok(&self.results);
         }
 
+        // Early validation with single read to catch ProcessAttach errors
+        if let Some(first) = self.results.first() {
+            let read_size = self.read_size.unwrap_or(first.value.len());
+            if let Err(e) = read_memory_address(self.pid, first.address as usize, read_size)
+                && let MemoryError::ProcessAttach(_) = e {
+                    return Err(ScanError::Memory(e));
+                }
+        }
+
+        // Parallel refresh
+        let updated_results: Vec<ScanResult> = self
+            .results
+            .par_iter()
+            .filter_map(|result| {
+                let read_size = self.read_size.unwrap_or(result.value.len());
+                match read_memory_address(self.pid, result.address as usize, read_size) {
+                    Err(_) => None, // Ignore errors during parallel scan
+                    Ok(val) => {
+                        let mut updated = result.clone();
+                        updated.value_type = self.value_type;
+                        updated.value = val;
+                        Some(updated)
+                    }
+                }
+            })
+            .collect();
+
+        self.results = updated_results;
         self.refresh_watchlist()?;
 
         Ok(&self.results)
@@ -402,26 +461,43 @@ impl Scan {
 
     pub fn next_scan(&mut self) -> Result<&Vec<ScanResult>, ScanError> {
         self.check_value()?;
-        let mut new_results = Vec::with_capacity(self.results.len() / 2);
-        for result in &mut self.results {
-            let read_size = self.read_size.unwrap_or(result.value.len());
-            match read_memory_address(self.pid, result.address as usize, read_size) {
-                Err(e) => {
-                    if let MemoryError::ProcessAttach(_) = e {
-                        return Err(ScanError::Memory(e));
-                    }
-                }
-                Ok(val) => {
-                    // check only prefix - ensure bounds are valid
-                    if val.len() >= self.value.len() && val[..self.value.len()] == self.value {
-                        let mut new_result = result.clone();
-                        new_result.value_type = self.value_type;
-                        new_result.value = val;
-                        new_results.push(new_result);
-                    }
-                }
-            }
+
+        if self.results.is_empty() {
+            self.refresh_watchlist()?;
+            return Ok(&self.results);
         }
+
+        // Early validation with single read to catch ProcessAttach errors
+        if let Some(first) = self.results.first() {
+            let read_size = self.read_size.unwrap_or(first.value.len());
+            if let Err(e) = read_memory_address(self.pid, first.address as usize, read_size)
+                && let MemoryError::ProcessAttach(_) = e {
+                    return Err(ScanError::Memory(e));
+                }
+        }
+
+        // Parallel next scan
+        let new_results: Vec<ScanResult> = self
+            .results
+            .par_iter()
+            .filter_map(|result| {
+                let read_size = self.read_size.unwrap_or(result.value.len());
+                match read_memory_address(self.pid, result.address as usize, read_size) {
+                    Err(_) => None, // Ignore errors during parallel scan
+                    Ok(val) => {
+                        // check only prefix - ensure bounds are valid
+                        if val.len() >= self.value.len() && val[..self.value.len()] == self.value {
+                            let mut new_result = result.clone();
+                            new_result.value_type = self.value_type;
+                            new_result.value = val;
+                            Some(new_result)
+                        } else {
+                            None
+                        }
+                    }
+                }
+            })
+            .collect();
 
         self.results = new_results;
         self.refresh_watchlist()?;
