@@ -13,6 +13,7 @@ pub enum ValueType {
     U32,
     I32,
     String,
+    Hex,
 }
 
 impl ValueType {
@@ -20,7 +21,7 @@ impl ValueType {
         match self {
             ValueType::U64 | ValueType::I64 => 8,
             ValueType::U32 | ValueType::I32 => 4,
-            ValueType::String => 0,
+            ValueType::String | ValueType::Hex => 0,
         }
     }
 
@@ -31,6 +32,7 @@ impl ValueType {
             ValueType::U32 => format!("u32 ({}B)", self.get_size()),
             ValueType::I32 => format!("i32 ({}B)", self.get_size()),
             ValueType::String => String::from("string"),
+            ValueType::Hex => String::from("hex"),
         }
     }
 
@@ -59,6 +61,7 @@ impl ValueType {
                     })
                     .collect::<String>()
             }
+            ValueType::Hex => hex::encode(value),
         })
     }
 }
@@ -224,6 +227,10 @@ impl Scan {
                 .to_le_bytes()
                 .to_vec(),
             ValueType::String => value_str.as_bytes().to_vec(),
+            ValueType::Hex => {
+                let hex_str = value_str.trim_start_matches("0x");
+                hex::decode(hex_str).map_err(|_| ScanError::InvalidValue)?
+            }
         })
     }
 
@@ -347,7 +354,10 @@ impl Scan {
                         return Err(ScanError::Memory(e));
                     }
                 }
-                Ok(val) => result.value = val,
+                Ok(val) => {
+                    result.value_type = self.value_type;
+                    result.value = val
+                }
             }
         }
 
@@ -378,7 +388,10 @@ impl Scan {
                         return Err(ScanError::Memory(e));
                     }
                 }
-                Ok(val) => result.value = val,
+                Ok(val) => {
+                    result.value_type = self.value_type;
+                    result.value = val;
+                }
             }
         }
 
@@ -402,6 +415,7 @@ impl Scan {
                     // check only prefix - ensure bounds are valid
                     if val.len() >= self.value.len() && val[..self.value.len()] == self.value {
                         let mut new_result = result.clone();
+                        new_result.value_type = self.value_type;
                         new_result.value = val;
                         new_results.push(new_result);
                     }

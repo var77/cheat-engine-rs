@@ -371,6 +371,7 @@ mod test {
         let address = usize::from_str_radix(hex_str.trim_start_matches("0x"), 16)
             .expect("failed to parse hex");
 
+        reader.read_line(&mut line).unwrap(); // consume readonly address
         let value = read_memory_address(proc.0.id(), address, 4).unwrap();
         let value = u32::from_le_bytes(value.try_into().unwrap());
         assert_eq!(value, 31337_u32);

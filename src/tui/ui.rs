@@ -141,7 +141,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         .iter()
         .map(|result| {
             let color = if result.is_read_only() {
-                Color::Yellow
+                Color::DarkGray
             } else {
                 Color::Green
             };
@@ -284,7 +284,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
 
     let mut read_size_box_x = 0;
     if let Some(scan) = &app.scan
-        && scan.value_type == ValueType::String
+        && (scan.value_type == ValueType::String || scan.value_type == ValueType::Hex)
     {
         let value_type_chunks = Layout::default()
             .direction(Direction::Horizontal)

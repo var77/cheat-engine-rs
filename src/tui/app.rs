@@ -591,6 +591,7 @@ impl App {
                 ValueType::U32,
                 ValueType::I32,
                 ValueType::String,
+                ValueType::Hex,
             ],
             app_message: AppMessage::default(),
             app_action: None,
@@ -1407,8 +1408,8 @@ impl App {
                                     );
                                 }
 
-                                // when string type is selected ReadSize option should be available
-                                if scan.value_type == ValueType::String {
+                                // when string or hex type is selected ReadSize option should be available
+                                if scan.value_type == ValueType::String || scan.value_type == ValueType::Hex {
                                     let idx = self
                                         .ui
                                         .selected_widgets

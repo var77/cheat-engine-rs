@@ -20,8 +20,9 @@ This is a simple memory scanner that lets you find and change values in running 
 
 ## What it can do
 
-- Scan memory for 32-bit and 64-bit numbers and strings
+- Scan memory for 32-bit and 64-bit numbers, strings, and hex values
 - String scanning with prefix matching - search by prefix and read a specified size (useful for CTF challenges when you only know part of a string)
+- Hex scanning - search for arbitrary byte sequences with configurable read size
 - Optional read-only region scanning - toggle R+W checkbox to include read-only memory regions in your scan
 - Filter results by comparing old and new values
 - Watch memory addresses in real-time

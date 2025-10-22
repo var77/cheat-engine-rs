@@ -1,4 +1,4 @@
-static STATIC_TEXT: &'static str = "TEST_STATIC_STRING";
+static STATIC_TEXT: &'static str = "FLAG{TEST_STATIC_STRING}";
 
 pub fn main() {
     // Construct flag at runtime using obfuscated mathematical operations
@@ -51,7 +51,8 @@ pub fn main() {
         match cmd_str {
             "p" => println!("{flag}"),
             "a" => println!("{:p}", flag_ptr),
-            "s" => println!("{:p}", STATIC_TEXT),
+            "s" => println!("{STATIC_TEXT}"),
+            "sp" => println!("{:p}", &STATIC_TEXT),
             _ => {}
         }
 
