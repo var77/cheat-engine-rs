@@ -683,11 +683,13 @@ impl App {
         self.ui.input_mode = InputMode::Normal;
         match last_screen {
             None => {
+                self.reset_scan_inputs();
                 self.show_process_list();
             }
             Some(screen) => match screen {
                 CurrentScreen::ProcessList => {
                     self.ui.input_buffers.process_filter = String::new();
+                    self.reset_scan_inputs();
                     self.show_process_list();
                 }
                 _ => {
@@ -695,6 +697,17 @@ impl App {
                 }
             },
         }
+    }
+
+    fn reset_scan_inputs(&mut self) {
+        self.ui.input_buffers.scan_value = String::new();
+        self.ui.input_buffers.start_address = String::new();
+        self.ui.input_buffers.end_address = String::new();
+        self.ui.input_buffers.read_size = String::new();
+        self.include_readonly_regions = false;
+        self.scan = None;
+        self.selected_process = None;
+        self.app_message = AppMessage::default();
     }
 
     fn enable_auto_input(&mut self) {
