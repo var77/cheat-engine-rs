@@ -1,3 +1,5 @@
+static STATIC_TEXT: &'static str = "TEST_STATIC_STRING";
+
 pub fn main() {
     // Construct flag at runtime using obfuscated mathematical operations
     // Each byte is computed from encoded values to avoid appearing in binary strings
@@ -49,6 +51,7 @@ pub fn main() {
         match cmd_str {
             "p" => println!("{flag}"),
             "a" => println!("{:p}", flag_ptr),
+            "s" => println!("{:p}", STATIC_TEXT),
             _ => {}
         }
 

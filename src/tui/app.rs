@@ -42,6 +42,7 @@ pub enum SelectedInput {
 pub enum ScanViewWidget {
     ScanResults,
     ValueInput,
+    PermissionsCheckbox,
     ValueTypeSelect,
     ReadSize,
     StartAddressInput,
@@ -116,6 +117,7 @@ pub enum Command {
     NewScan,
     NextScan,
     RefreshScan,
+    ToggleReadWrite,
 
     // Result commands
     AddToWatchlist,
@@ -251,6 +253,10 @@ impl KeyBindings {
             Command::RefreshScan,
         );
         self.scan_view_normal.insert(
+            KeyPress::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            Command::ToggleReadWrite,
+        );
+        self.scan_view_normal.insert(
             KeyPress::new(KeyCode::Char('w'), KeyModifiers::NONE),
             Command::AddToWatchlist,
         );
@@ -375,9 +381,9 @@ impl KeyBindings {
                 if let KeyCode::Char(c) = key_event.code
                     && (key_event.modifiers == KeyModifiers::NONE
                         || key_event.modifiers == KeyModifiers::SHIFT)
-                    {
-                        return Some(Command::InsertChar(c));
-                    }
+                {
+                    return Some(Command::InsertChar(c));
+                }
                 self.insert_mode.get(&key_press).cloned()
             }
             InputMode::Normal => match screen {
@@ -508,6 +514,7 @@ impl WidgetSelection {
             scan_view_widgets: vec![
                 ScanViewWidget::ScanResults,
                 ScanViewWidget::ValueInput,
+                ScanViewWidget::PermissionsCheckbox,
                 ScanViewWidget::ValueTypeSelect,
                 ScanViewWidget::StartAddressInput,
                 ScanViewWidget::EndAddressInput,
@@ -565,6 +572,7 @@ pub struct App {
     pub app_message: AppMessage,
     pub app_action: Option<AppAction>,
     pub key_bindings: KeyBindings,
+    pub include_readonly_regions: bool,
 }
 
 impl App {
@@ -587,6 +595,18 @@ impl App {
             app_message: AppMessage::default(),
             app_action: None,
             key_bindings: KeyBindings::default(),
+            include_readonly_regions: false,
+        }
+    }
+
+    fn get_memory_permissions(&self) -> Vec<core::mem::MemoryRegionPerms> {
+        if self.include_readonly_regions {
+            vec![
+                core::mem::MemoryRegionPerms::Write,
+                core::mem::MemoryRegionPerms::Read,
+            ]
+        } else {
+            vec![core::mem::MemoryRegionPerms::Write]
         }
     }
 
@@ -626,6 +646,7 @@ impl App {
                 .value_types
                 .get(self.selected_value_type)
                 .unwrap_or(&ValueType::U64),
+            None,
             None,
             None,
         );
@@ -901,11 +922,12 @@ impl App {
         // Special handling for 'g' key to detect gg
         if key.code == KeyCode::Char('g') && key.modifiers == KeyModifiers::NONE {
             if let Some(t) = self.ui.last_g_press_time
-                && t.elapsed() < Duration::from_millis(500) {
-                    self.ui.last_g_press_time = None;
-                    self.handle_command(Command::MoveToTop);
-                    return;
-                }
+                && t.elapsed() < Duration::from_millis(500)
+            {
+                self.ui.last_g_press_time = None;
+                self.handle_command(Command::MoveToTop);
+                return;
+            }
             self.ui.last_g_press_time = Some(Instant::now());
             return;
         }
@@ -1106,9 +1128,10 @@ impl App {
 
                 // Special handling for process filter
                 if let Some(selected_input) = &self.ui.selected_input
-                    && selected_input == &SelectedInput::ProcessFilter {
-                        self.select_process();
-                    }
+                    && selected_input == &SelectedInput::ProcessFilter
+                {
+                    self.select_process();
+                }
             }
 
             // Character input commands
@@ -1173,6 +1196,22 @@ impl App {
                     self.app_action = Some(AppAction::Refresh);
                 }
             }
+            Command::ToggleReadWrite => {
+                if self.ui.selected_widgets.scan_view_selected_widget
+                    == ScanViewWidget::PermissionsCheckbox
+                {
+                    self.include_readonly_regions = !self.include_readonly_regions;
+                    let perms = self.get_memory_permissions();
+                    if let Some(scan) = &mut self.scan
+                        && let Err(e) = scan.set_mem_permissions(perms)
+                    {
+                        self.app_message = AppMessage::new(
+                            &format!("Error setting memory permissions: {}", e),
+                            AppMessageType::Error,
+                        );
+                    }
+                }
+            }
 
             // Result commands
             Command::AddToWatchlist => {
@@ -1180,37 +1219,39 @@ impl App {
                     && self.ui.selected_widgets.scan_view_selected_widget
                         == ScanViewWidget::ScanResults
                     && let Some(selected) = self.ui.list_states.scan_results.selected()
-                    && let Some(result) = scan.results.get(selected) {
-                        scan.add_to_watchlist(result.clone());
-                        self.ui.scroll_states.scan_watchlist_vertical = self
-                            .ui
-                            .scroll_states
-                            .scan_watchlist_vertical
-                            .content_length(scan.watchlist.len());
-                        if self.ui.list_states.scan_watchlist.selected().is_none()
-                            && !scan.watchlist.is_empty()
-                        {
-                            self.ui.list_states.scan_watchlist.select(Some(0));
-                        }
-                        self.app_message =
-                            AppMessage::new("Address added to watchlist", AppMessageType::Info);
+                    && let Some(result) = scan.results.get(selected)
+                {
+                    scan.add_to_watchlist(result.clone());
+                    self.ui.scroll_states.scan_watchlist_vertical = self
+                        .ui
+                        .scroll_states
+                        .scan_watchlist_vertical
+                        .content_length(scan.watchlist.len());
+                    if self.ui.list_states.scan_watchlist.selected().is_none()
+                        && !scan.watchlist.is_empty()
+                    {
+                        self.ui.list_states.scan_watchlist.select(Some(0));
                     }
+                    self.app_message =
+                        AppMessage::new("Address added to watchlist", AppMessageType::Info);
+                }
             }
             Command::RemoveFromWatchlist => {
                 if let Some(scan) = &mut self.scan
                     && self.ui.selected_widgets.scan_view_selected_widget
                         == ScanViewWidget::WatchList
                     && let Some(selected) = self.ui.list_states.scan_watchlist.selected()
-                    && let Some(result) = scan.watchlist.get(selected) {
-                        scan.remove_from_watchlist(result.address);
-                        self.ui.scroll_states.scan_watchlist_vertical = self
-                            .ui
-                            .scroll_states
-                            .scan_watchlist_vertical
-                            .content_length(scan.watchlist.len());
-                        self.app_message =
-                            AppMessage::new("Address removed from watchlist", AppMessageType::Info);
-                    }
+                    && let Some(result) = scan.watchlist.get(selected)
+                {
+                    scan.remove_from_watchlist(result.address);
+                    self.ui.scroll_states.scan_watchlist_vertical = self
+                        .ui
+                        .scroll_states
+                        .scan_watchlist_vertical
+                        .content_length(scan.watchlist.len());
+                    self.app_message =
+                        AppMessage::new("Address removed from watchlist", AppMessageType::Info);
+                }
             }
             Command::EditValue => match self.ui.selected_widgets.scan_view_selected_widget {
                 ScanViewWidget::ValueInput => self.insert_mode_for(SelectedInput::ScanValue),
@@ -1237,15 +1278,22 @@ impl App {
                     });
 
                     if let Some(selected_value) = &self.selected_value {
-                        match selected_value.get_string() {
-                            Err(e) => {
-                                self.app_message =
-                                    AppMessage::new(&format!("{e}"), AppMessageType::Info);
-                            }
-                            Ok(result_value) => {
-                                self.ui.input_buffers.result_value = result_value;
-                                self.insert_mode_for(SelectedInput::ResultValue);
-                                self.go_to(CurrentScreen::ValueEditing);
+                        if selected_value.is_read_only() {
+                            self.app_message = AppMessage::new(
+                                "Cannot edit read-only memory region",
+                                AppMessageType::Error,
+                            );
+                        } else {
+                            match selected_value.get_string() {
+                                Err(e) => {
+                                    self.app_message =
+                                        AppMessage::new(&format!("{e}"), AppMessageType::Info);
+                                }
+                                Ok(result_value) => {
+                                    self.ui.input_buffers.result_value = result_value;
+                                    self.insert_mode_for(SelectedInput::ResultValue);
+                                    self.go_to(CurrentScreen::ValueEditing);
+                                }
                             }
                         }
                     } else {
@@ -1254,6 +1302,9 @@ impl App {
                             AppMessageType::Info,
                         );
                     }
+                }
+                ScanViewWidget::PermissionsCheckbox => {
+                    self.handle_command(Command::ToggleReadWrite);
                 }
                 _ => {}
             },

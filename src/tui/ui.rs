@@ -140,12 +140,17 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     let result_items: Vec<ListItem> = scan_result_items
         .iter()
         .map(|result| {
+            let color = if result.is_read_only() {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
                 result.get_string().unwrap_or("TypeMismatch".to_owned())
             )))
-            .style(Style::new().fg(Color::Green))
+            .style(Style::new().fg(color))
         })
         .collect();
 
@@ -174,19 +179,24 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     );
 
     // Watchlist
-    let result_items: Vec<ListItem> = watchlist_items
+    let watchlist_items_display: Vec<ListItem> = watchlist_items
         .iter()
         .map(|result| {
+            let color = if result.is_read_only() {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
             ListItem::new(Line::from(format!(
                 "0x{:x} | {}",
                 result.address,
                 result.get_string().unwrap_or("TypeMismatch".to_owned())
             )))
-            .style(Style::new().fg(Color::Green))
+            .style(Style::new().fg(color))
         })
         .collect();
 
-    let result_list_widget = List::new(result_items)
+    let watchlist_widget = List::new(watchlist_items_display)
         .highlight_style(Style::new().bg(Color::Blue).add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ")
         .highlight_spacing(HighlightSpacing::Always)
@@ -197,7 +207,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         );
 
     frame.render_stateful_widget(
-        result_list_widget,
+        watchlist_widget,
         watchlist_rect,
         &mut app.ui.list_states.scan_watchlist,
     );
@@ -222,10 +232,31 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         ])
         .split(options_rect);
 
+    // Split Value input row to add checkbox
+    let value_input_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+        .split(options_view_chunks[0]);
+
     let value_input = Paragraph::new(app.ui.input_buffers.scan_value.as_str())
         .style(get_active_widget_style(app, ScanViewWidget::ValueInput))
         .block(Block::bordered().title("Value"));
-    frame.render_widget(value_input, options_view_chunks[0]);
+    frame.render_widget(value_input, value_input_chunks[0]);
+
+    // Readonly checkbox
+    let checkbox_symbol = if app.include_readonly_regions {
+        "[X]"
+    } else {
+        "[ ]"
+    };
+    let checkbox = Paragraph::new(checkbox_symbol)
+        .style(get_active_widget_style(
+            app,
+            ScanViewWidget::PermissionsCheckbox,
+        ))
+        .block(Block::bordered().title("R+W"))
+        .alignment(Alignment::Center);
+    frame.render_widget(checkbox, value_input_chunks[1]);
 
     // Value Type Select
     let items: Vec<ListItem> = app
@@ -260,7 +291,11 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(options_view_chunks[1]);
 
-        frame.render_stateful_widget(list, value_type_chunks[0], &mut app.ui.list_states.value_type);
+        frame.render_stateful_widget(
+            list,
+            value_type_chunks[0],
+            &mut app.ui.list_states.value_type,
+        );
 
         let read_size_input = Paragraph::new(app.ui.input_buffers.read_size.as_str())
             .style(get_active_widget_style(app, ScanViewWidget::ReadSize))
@@ -268,7 +303,11 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
         read_size_box_x = value_type_chunks[1].x;
         frame.render_widget(read_size_input, value_type_chunks[1]);
     } else {
-        frame.render_stateful_widget(list, options_view_chunks[1], &mut app.ui.list_states.value_type);
+        frame.render_stateful_widget(
+            list,
+            options_view_chunks[1],
+            &mut app.ui.list_states.value_type,
+        );
     }
     //
 
@@ -359,7 +398,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     match app.ui.selected_widgets.scan_view_selected_widget {
         ScanViewWidget::ScanResults | ScanViewWidget::WatchList => {
             help_text_items.extend(vec![
-                Span::from("u/Enter: Update Value | ").fg(Color::Green),
+                Span::from("Enter/u: Update Value | ").fg(Color::Green),
             ]);
         }
         _ => {}

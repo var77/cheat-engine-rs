@@ -2,7 +2,8 @@ use memchr::memmem;
 use std::{array::TryFromSliceError, str};
 
 use crate::core::mem::{
-    MemoryError, MemoryRegion, get_memory_regions, read_memory_address, write_memory_address,
+    DEFAULT_SEARCH_PERMS, MemoryError, MemoryRegion, MemoryRegionPerms, get_memory_regions,
+    read_memory_address, write_memory_address,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +67,7 @@ impl ValueType {
 pub struct ScanResult {
     pub address: u64,
     pub value_type: ValueType,
+    pub perms: Vec<MemoryRegionPerms>,
     pub value: Vec<u8>,
 }
 
@@ -96,10 +98,16 @@ impl std::fmt::Display for ScanError {
 }
 
 impl ScanResult {
-    pub fn new(address: u64, value_type: ValueType, value: Vec<u8>) -> Self {
+    pub fn new(
+        address: u64,
+        value_type: ValueType,
+        value: Vec<u8>,
+        perms: Vec<MemoryRegionPerms>,
+    ) -> Self {
         ScanResult {
             address,
             value_type,
+            perms,
             value,
         }
     }
@@ -108,6 +116,10 @@ impl ScanResult {
         self.value_type
             .get_value_string(self.value.as_slice())
             .map_err(|_| ScanError::TypeMismatch)
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        !self.perms.contains(&MemoryRegionPerms::Write)
     }
 }
 
@@ -121,6 +133,7 @@ pub struct Scan {
     read_size: Option<usize>,
     start_address: Option<u64>,
     end_address: Option<u64>,
+    memory_permissions: Vec<MemoryRegionPerms>,
     memory_regions: Vec<MemoryRegion>,
 }
 
@@ -131,9 +144,12 @@ impl Scan {
         value_type: ValueType,
         start_address: Option<u64>,
         end_address: Option<u64>,
+        memory_permissions: Option<Vec<MemoryRegionPerms>>,
     ) -> Result<Self, ScanError> {
+        let memory_permissions = memory_permissions.unwrap_or(DEFAULT_SEARCH_PERMS.to_vec());
         let memory_regions =
-            get_memory_regions(pid, start_address, end_address).map_err(ScanError::Memory)?;
+            get_memory_regions(pid, start_address, end_address, Some(&memory_permissions))
+                .map_err(ScanError::Memory)?;
 
         Ok(Scan {
             pid,
@@ -143,9 +159,19 @@ impl Scan {
             end_address,
             memory_regions,
             value_type,
+            memory_permissions,
             results: vec![],
             watchlist: vec![],
         })
+    }
+
+    pub fn set_mem_permissions(
+        &mut self,
+        memory_permissions: Vec<MemoryRegionPerms>,
+    ) -> Result<(), ScanError> {
+        self.memory_permissions = memory_permissions;
+        self.update_memory_regions()?;
+        Ok(())
     }
 
     pub fn set_value_type(
@@ -218,8 +244,13 @@ impl Scan {
     }
 
     fn update_memory_regions(&mut self) -> Result<(), ScanError> {
-        self.memory_regions = get_memory_regions(self.pid, self.start_address, self.end_address)
-            .map_err(ScanError::Memory)?;
+        self.memory_regions = get_memory_regions(
+            self.pid,
+            self.start_address,
+            self.end_address,
+            Some(&self.memory_permissions),
+        )
+        .map_err(ScanError::Memory)?;
         Ok(())
     }
 
@@ -282,6 +313,7 @@ impl Scan {
                             (current_address + i) as u64,
                             self.value_type,
                             val[i..end].to_vec(),
+                            region.perms.clone(),
                         )
                     }));
                 }
@@ -437,6 +469,7 @@ mod test {
                     ValueType::U32,
                     None,
                     None,
+                    None,
                 );
                 assert!(scan.is_ok());
                 let scan = scan.unwrap();
@@ -474,6 +507,7 @@ mod test {
             proc.0.id(),
             31337_u32.to_le_bytes().to_vec(),
             ValueType::U32,
+            None,
             None,
             None,
         );
@@ -518,6 +552,7 @@ mod test {
             proc.0.id(),
             31337_u32.to_le_bytes().to_vec(),
             ValueType::U32,
+            None,
             None,
             None,
         );
@@ -575,6 +610,7 @@ mod test {
             ValueType::U32,
             None,
             None,
+            None,
         );
         assert!(scan.is_ok());
         let mut scan = scan.unwrap();
@@ -615,6 +651,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         let result = scan.set_value_from_str("12345");
@@ -635,6 +672,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         let result = scan.set_value_from_str("-54321");
@@ -655,6 +693,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         let result = scan.set_value_from_str("31337");
@@ -675,6 +714,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         let result = scan.set_value_from_str("-999");
@@ -695,6 +735,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         let result = scan.set_value_from_str("not_a_number");
@@ -715,6 +756,7 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
         // This value is too large for u32
@@ -743,6 +785,7 @@ mod test {
                     proc.0.id(),
                     31337_u32.to_le_bytes().to_vec(),
                     ValueType::U32,
+                    None,
                     None,
                     None,
                 )
@@ -777,6 +820,7 @@ mod test {
                     ValueType::U32,
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
 
@@ -808,6 +852,7 @@ mod test {
                     31337_u32.to_le_bytes().to_vec(),
                     ValueType::U32,
                     Some(0x1000),
+                    None,
                     None,
                 )
                 .unwrap();
@@ -842,6 +887,7 @@ mod test {
                     ValueType::U32,
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
 
@@ -874,6 +920,7 @@ mod test {
                     ValueType::U32,
                     None,
                     Some(0x1000),
+                    None,
                 )
                 .unwrap();
 
@@ -905,6 +952,7 @@ mod test {
                     proc.0.id(),
                     31337_u32.to_le_bytes().to_vec(),
                     ValueType::U32,
+                    None,
                     None,
                     None,
                 )
@@ -939,6 +987,7 @@ mod test {
                     ValueType::U32,
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
 
@@ -971,6 +1020,7 @@ mod test {
                     ValueType::U32,
                     None,
                     Some(0xFFFF),
+                    None,
                 )
                 .unwrap();
 
@@ -1002,6 +1052,7 @@ mod test {
                     proc.0.id(),
                     31337_u32.to_le_bytes().to_vec(),
                     ValueType::U32,
+                    None,
                     None,
                     None,
                 )
@@ -1036,6 +1087,7 @@ mod test {
                     ValueType::U32,
                     Some(0x2000),
                     None,
+                    None,
                 )
                 .unwrap();
 
@@ -1060,10 +1112,11 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
-        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
-        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4], vec![]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8], vec![]);
 
         scan.add_to_watchlist(result1);
         assert_eq!(scan.watchlist.len(), 1);
@@ -1087,9 +1140,10 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
-        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4], vec![]);
 
         scan.add_to_watchlist(result.clone());
         assert_eq!(scan.watchlist.len(), 1);
@@ -1112,10 +1166,11 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
-        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
-        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4], vec![]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8], vec![]);
 
         scan.add_to_watchlist(result1.clone());
         scan.add_to_watchlist(result2.clone());
@@ -1139,10 +1194,11 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
-        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
-        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8]);
+        let result1 = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4], vec![]);
+        let result2 = ScanResult::new(0x2000, ValueType::U32, vec![5, 6, 7, 8], vec![]);
 
         scan.add_to_watchlist(result1);
         assert_eq!(scan.watchlist.len(), 1);
@@ -1166,9 +1222,10 @@ mod test {
             end_address: None,
             read_size: None,
             memory_regions: vec![],
+            memory_permissions: vec![],
         };
 
-        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4]);
+        let result = ScanResult::new(0x1000, ValueType::U32, vec![1, 2, 3, 4], vec![]);
 
         // Try to remove from empty watchlist
         scan.remove_from_watchlist(result.address);
@@ -1200,6 +1257,7 @@ mod test {
             proc.0.id(),
             "FLAG{".as_bytes().to_vec(),
             ValueType::String,
+            None,
             None,
             None,
         )
@@ -1246,6 +1304,7 @@ mod test {
             proc.0.id(),
             "FLAG{".as_bytes().to_vec(),
             ValueType::String,
+            None,
             None,
             None,
         )
@@ -1300,6 +1359,7 @@ mod test {
             proc.0.id(),
             31337_u32.to_le_bytes().to_vec(),
             ValueType::U32,
+            None,
             None,
             None,
         )
@@ -1362,6 +1422,7 @@ mod test {
             ValueType::U32,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -1373,8 +1434,12 @@ mod test {
         scan.add_to_watchlist(scan.results[0].clone());
 
         // Add a fake entry to watchlist to test multiple entries
-        let fake_result =
-            ScanResult::new(address as u64 + 100, ValueType::U32, vec![10, 20, 30, 40]);
+        let fake_result = ScanResult::new(
+            address as u64 + 100,
+            ValueType::U32,
+            vec![10, 20, 30, 40],
+            vec![],
+        );
         scan.add_to_watchlist(fake_result);
         assert_eq!(scan.watchlist.len(), 2);
 
@@ -1390,5 +1455,81 @@ mod test {
             u32::from_le_bytes(scan.watchlist[0].value.as_slice().try_into().unwrap()),
             888888_u32
         );
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_read_write_scan() {
+        use super::*;
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut proc = crate::core::utils::ChildGuard(proc);
+        let stdout = proc.0.stdout.take().expect("child had no stdout");
+        let mut reader = BufReader::new(stdout);
+        let mut line1 = String::new();
+        let mut line2 = String::new();
+
+        // Read writable address (31337)
+        reader.read_line(&mut line1).unwrap();
+        // Read readonly address (12345)
+        reader.read_line(&mut line2).unwrap();
+
+        // Test 1: Scan only writable regions (default behavior)
+        let mut scan = Scan::new(
+            proc.0.id(),
+            vec![],
+            ValueType::U32,
+            None,
+            None,
+            Some(vec![MemoryRegionPerms::Write]),
+        )
+        .unwrap();
+
+        scan.set_value_from_str("31337").unwrap();
+        scan.init().unwrap();
+
+        // Should find the writable value
+        assert!(scan.results.len() >= 1);
+        let writable_result = scan
+            .results
+            .iter()
+            .find(|r| u32::from_le_bytes(r.value.as_slice().try_into().unwrap()) == 31337);
+        assert!(writable_result.is_some());
+        assert!(!writable_result.unwrap().is_read_only());
+
+        // Test 2: Scan both read and write regions
+        let mut scan_rw = Scan::new(
+            proc.0.id(),
+            vec![],
+            ValueType::U32,
+            None,
+            None,
+            Some(vec![MemoryRegionPerms::Write, MemoryRegionPerms::Read]),
+        )
+        .unwrap();
+
+        scan_rw.set_value_from_str("12345").unwrap();
+        scan_rw.init().unwrap();
+
+        // Should find the readonly value
+        assert!(scan_rw.results.len() >= 1);
+        let readonly_result = scan_rw.results.iter().find(|r| {
+            u32::from_le_bytes(r.value.as_slice().try_into().unwrap()) == 12345 && r.is_read_only()
+        });
+        assert!(readonly_result.is_some());
+
+        // Verify that readonly result has only Read permission
+        let readonly = readonly_result.unwrap();
+        assert!(readonly.is_read_only());
+        assert!(readonly.perms.contains(&MemoryRegionPerms::Read));
+        assert!(!readonly.perms.contains(&MemoryRegionPerms::Write));
     }
 }

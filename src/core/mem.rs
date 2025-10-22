@@ -9,6 +9,14 @@ pub enum MemoryError {
     ProcessAttach(i32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MemoryRegionPerms {
+    Read,
+    Write,
+}
+
+pub const DEFAULT_SEARCH_PERMS: [MemoryRegionPerms; 1] = [MemoryRegionPerms::Write];
+
 impl Display for MemoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -27,7 +35,7 @@ pub struct MemoryRegion {
     pub start: u64,
     pub end: u64,
     #[allow(dead_code)]
-    pub perms: String,
+    pub perms: Vec<MemoryRegionPerms>,
 }
 
 #[cfg(target_os = "macos")]
@@ -35,17 +43,20 @@ pub fn get_memory_regions(
     pid: u32,
     start: Option<u64>,
     end: Option<u64>,
+    search_perms: Option<&[MemoryRegionPerms]>,
 ) -> Result<Vec<MemoryRegion>, MemoryError> {
     use mach_sys::{
         kern_return::{KERN_INVALID_ADDRESS, KERN_SUCCESS},
         port::mach_port_name_t,
         traps::{mach_task_self, task_for_pid},
         vm::mach_vm_region,
-        vm_prot::{VM_PROT_EXECUTE, VM_PROT_READ, VM_PROT_WRITE},
+        vm_prot::{VM_PROT_READ, VM_PROT_WRITE},
         vm_region::{VM_REGION_BASIC_INFO_64, vm_region_info_t},
         vm_types::{mach_vm_address_t, mach_vm_size_t, vm_map_t},
     };
     use mach_sys::{port::mach_port_t, vm_region::vm_region_basic_info_data_64_t};
+
+    let search_perms = search_perms.unwrap_or(&DEFAULT_SEARCH_PERMS);
 
     let task: mach_port_name_t = 0;
     let kret = unsafe {
@@ -91,34 +102,22 @@ pub fn get_memory_regions(
             return Err(MemoryError::MemRead(kr));
         }
 
-        if info.protection & VM_PROT_WRITE == 0 {
-            // skip non-writable regions
-            address += size;
-            continue;
-        }
-
-        let mut perms = String::new();
+        let mut perms = Vec::with_capacity(2);
         if info.protection & VM_PROT_READ != 0 {
-            perms.push('r');
-        } else {
-            perms.push('-');
-        }
-        if info.protection & VM_PROT_WRITE != 0 {
-            perms.push('w');
-        } else {
-            perms.push('-');
-        }
-        if info.protection & VM_PROT_EXECUTE != 0 {
-            perms.push('x');
-        } else {
-            perms.push('-');
+            perms.push(MemoryRegionPerms::Read);
         }
 
-        regions.push(MemoryRegion {
-            start: address,
-            end: address + size,
-            perms,
-        });
+        if info.protection & VM_PROT_WRITE != 0 {
+            perms.push(MemoryRegionPerms::Write);
+        }
+
+        if search_perms.iter().filter(|p| perms.contains(p)).count() > 0 {
+            regions.push(MemoryRegion {
+                start: address,
+                end: address + size,
+                perms,
+            });
+        }
 
         address += size;
     }
@@ -131,11 +130,13 @@ pub fn get_memory_regions(
     pid: u32,
     start: Option<u64>,
     end: Option<u64>,
+    search_perms: Option<&[MemoryRegionPerms]>,
 ) -> Result<Vec<MemoryRegion>, MemoryError> {
     use std::fs::File;
     use std::io::{self, BufRead};
     use std::path::PathBuf;
 
+    let search_perms = search_perms.unwrap_or(&DEFAULT_SEARCH_PERMS);
     let path = PathBuf::from(format!("/proc/{}/maps", pid));
     let file = File::open(&path)
         .map_err(|e| MemoryError::NoPermission(e.raw_os_error().unwrap_or(-1) as i32))?;
@@ -165,15 +166,29 @@ pub fn get_memory_regions(
             continue;
         }
 
-        if !perms.contains('w') {
-            continue;
+        let mut region_perms = Vec::with_capacity(2);
+        let perms = perms[..3];
+
+        if perms.contains('r') {
+            region_perms.push(MemoryRegionPerms::Read);
         }
 
-        regions.push(MemoryRegion {
-            start: start_addr_val,
-            end: end_addr_val,
-            perms: perms[..3].to_string(), // take 'rwx'
-        });
+        if perms.contains('w') {
+            region_perms.push(MemoryRegionPerms::Write);
+        }
+
+        if search_perms
+            .iter()
+            .filter(|p| region_perms.contains(p))
+            .count()
+            > 0
+        {
+            regions.push(MemoryRegion {
+                start: start_addr_val,
+                end: end_addr_val,
+                perms: region_perms,
+            });
+        }
     }
 
     Ok(regions)
@@ -217,7 +232,7 @@ mod test {
 
     #[test]
     pub fn test_get_regions_error() {
-        let result = get_memory_regions(0, None, None);
+        let result = get_memory_regions(0, None, None, None);
 
         assert!(result.is_err());
 
@@ -244,7 +259,29 @@ mod test {
             Err(e) => assert!(false, "Error running simple program: {e}"),
             Ok(child) => {
                 let proc = crate::core::utils::ChildGuard(child);
-                let regions = get_memory_regions(proc.0.id(), None, None);
+                let regions = get_memory_regions(proc.0.id(), None, None, None);
+                assert!(regions.is_ok());
+                let regions = regions.unwrap();
+                assert_ne!(regions.len(), 0);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    pub fn test_get_regions_readonly_success() {
+        let proc = Command::new("./target/debug/examples/simple_program")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        match proc {
+            Err(e) => assert!(false, "Error running simple program: {e}"),
+            Ok(child) => {
+                let proc = crate::core::utils::ChildGuard(child);
+                let regions =
+                    get_memory_regions(proc.0.id(), None, None, Some(&[MemoryRegionPerms::Read]));
                 assert!(regions.is_ok());
                 let regions = regions.unwrap();
                 assert_ne!(regions.len(), 0);
@@ -267,12 +304,12 @@ mod test {
             Err(e) => assert!(false, "Error running simple program: {e}"),
             Ok(child) => {
                 let proc = crate::core::utils::ChildGuard(child);
-                let regions = get_memory_regions(proc.0.id(), Some(u64::MAX), None);
+                let regions = get_memory_regions(proc.0.id(), Some(u64::MAX), None, None);
                 assert!(regions.is_ok());
                 let regions = regions.unwrap();
                 assert_eq!(regions.len(), 0);
 
-                let regions = get_memory_regions(proc.0.id(), None, Some(0));
+                let regions = get_memory_regions(proc.0.id(), None, Some(0), None);
                 assert!(regions.is_ok());
                 let regions = regions.unwrap();
                 assert_eq!(regions.len(), 0);

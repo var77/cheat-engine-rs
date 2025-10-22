@@ -22,6 +22,7 @@ This is a simple memory scanner that lets you find and change values in running 
 
 - Scan memory for 32-bit and 64-bit numbers and strings
 - String scanning with prefix matching - search by prefix and read a specified size (useful for CTF challenges when you only know part of a string)
+- Optional read-only region scanning - toggle R+W checkbox to include read-only memory regions in your scan
 - Filter results by comparing old and new values
 - Watch memory addresses in real-time
 - Terminal-based UI using keyboard shortcuts
@@ -58,10 +59,13 @@ sudo ./target/release/cheat-engine-rs
 
 1. Start the program with `sudo`
 2. Pick a process from the list
-3. Do a first scan for a value
-4. Change the value in the target program
-5. Do a next scan to filter results
-6. Keep scanning until you find the right address
+3. Enter a value to search for
+4. (Optional) Toggle the R+W checkbox with `Space` to scan both readable and writable memory regions. By default, only writable regions are scanned. Read-only results are shown in yellow and cannot be edited.
+5. Do a first scan with `s`
+6. Change the value in the target program
+7. Do a next scan with `n` to filter results
+8. Keep scanning until you find the right address
+9. Press `Enter` or `u` to edit a writable value
 
 ## Running Tests
 
