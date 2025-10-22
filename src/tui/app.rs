@@ -582,6 +582,7 @@ pub struct App {
     pub app_action: Option<AppAction>,
     pub key_bindings: KeyBindings,
     pub include_readonly_regions: bool,
+    pub clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -606,6 +607,7 @@ impl App {
             app_action: None,
             key_bindings: KeyBindings::default(),
             include_readonly_regions: false,
+            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 
@@ -1353,26 +1355,23 @@ impl App {
                     {
                         match result.get_string() {
                             Ok(value) => {
-                                match arboard::Clipboard::new() {
-                                    Ok(mut clipboard) => {
-                                        if clipboard.set_text(&value).is_ok() {
-                                            self.app_message = AppMessage::new(
-                                                "Value copied to clipboard",
-                                                AppMessageType::Info,
-                                            );
-                                        } else {
-                                            self.app_message = AppMessage::new(
-                                                "Failed to copy to clipboard",
-                                                AppMessageType::Error,
-                                            );
-                                        }
-                                    }
-                                    Err(_) => {
+                                if let Some(clipboard) = &mut self.clipboard {
+                                    if clipboard.set_text(&value).is_ok() {
                                         self.app_message = AppMessage::new(
-                                            "Failed to access clipboard",
+                                            "Value copied to clipboard",
+                                            AppMessageType::Info,
+                                        );
+                                    } else {
+                                        self.app_message = AppMessage::new(
+                                            "Failed to copy to clipboard",
                                             AppMessageType::Error,
                                         );
                                     }
+                                } else {
+                                    self.app_message = AppMessage::new(
+                                        "Clipboard not available",
+                                        AppMessageType::Error,
+                                    );
                                 }
                             }
                             Err(_) => {

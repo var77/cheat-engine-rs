@@ -167,7 +167,7 @@ pub fn get_memory_regions(
         }
 
         let mut region_perms = Vec::with_capacity(2);
-        let perms = perms[..3];
+        let perms = &perms[..3];
 
         if perms.contains('r') {
             region_perms.push(MemoryRegionPerms::Read);
