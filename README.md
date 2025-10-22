@@ -26,6 +26,7 @@ This is a simple memory scanner that lets you find and change values in running 
 - Optional read-only region scanning - toggle R+W checkbox to include read-only memory regions in your scan
 - Filter results by comparing old and new values
 - Watch memory addresses in real-time
+- Copy result values to clipboard with a single key press
 - Terminal-based UI using keyboard shortcuts
 
 ## Supported Systems

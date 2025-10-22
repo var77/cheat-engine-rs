@@ -398,6 +398,7 @@ pub fn draw_scan_screen(frame: &mut Frame, app: &mut App) {
     match app.ui.selected_widgets.scan_view_selected_widget {
         ScanViewWidget::ScanResults | ScanViewWidget::WatchList => {
             help_text_items.extend(vec![
+                Span::from("c: Copy | ").fg(Color::Green),
                 Span::from("Enter/u: Update Value | ").fg(Color::Green),
             ]);
         }

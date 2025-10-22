@@ -123,6 +123,7 @@ pub enum Command {
     AddToWatchlist,
     RemoveFromWatchlist,
     EditValue,
+    CopyValue,
 
     // List commands
     MoveUp,
@@ -267,6 +268,14 @@ impl KeyBindings {
         self.scan_view_normal.insert(
             KeyPress::new(KeyCode::Char('u'), KeyModifiers::NONE),
             Command::EditValue,
+        );
+        self.scan_view_normal.insert(
+            KeyPress::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            Command::CopyValue,
+        );
+        self.scan_view_normal.insert(
+            KeyPress::new(KeyCode::Char('y'), KeyModifiers::NONE),
+            Command::CopyValue,
         );
         self.scan_view_normal.insert(
             KeyPress::new(KeyCode::Tab, KeyModifiers::NONE),
@@ -1322,6 +1331,63 @@ impl App {
                 }
                 _ => {}
             },
+            Command::CopyValue => {
+                if let Some(scan) = &self.scan
+                    && (self.ui.selected_widgets.scan_view_selected_widget
+                        == ScanViewWidget::ScanResults
+                        || self.ui.selected_widgets.scan_view_selected_widget
+                            == ScanViewWidget::WatchList)
+                {
+                    let selected_index = match self.ui.selected_widgets.scan_view_selected_widget {
+                        ScanViewWidget::ScanResults => self.ui.list_states.scan_results.selected(),
+                        _ => self.ui.list_states.scan_watchlist.selected(),
+                    };
+
+                    let list = match self.ui.selected_widgets.scan_view_selected_widget {
+                        ScanViewWidget::ScanResults => &scan.results,
+                        _ => &scan.watchlist,
+                    };
+
+                    if let Some(index) = selected_index
+                        && let Some(result) = list.get(index)
+                    {
+                        match result.get_string() {
+                            Ok(value) => {
+                                match arboard::Clipboard::new() {
+                                    Ok(mut clipboard) => {
+                                        if clipboard.set_text(&value).is_ok() {
+                                            self.app_message = AppMessage::new(
+                                                "Value copied to clipboard",
+                                                AppMessageType::Info,
+                                            );
+                                        } else {
+                                            self.app_message = AppMessage::new(
+                                                "Failed to copy to clipboard",
+                                                AppMessageType::Error,
+                                            );
+                                        }
+                                    }
+                                    Err(_) => {
+                                        self.app_message = AppMessage::new(
+                                            "Failed to access clipboard",
+                                            AppMessageType::Error,
+                                        );
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                self.app_message = AppMessage::new(
+                                    "Failed to get value",
+                                    AppMessageType::Error,
+                                );
+                            }
+                        }
+                    } else {
+                        self.app_message =
+                            AppMessage::new("No result selected", AppMessageType::Info);
+                    }
+                }
+            }
 
             // List commands
             Command::MoveUp => self.handle_navigate(Direction::Up),
