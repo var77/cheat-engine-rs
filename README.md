@@ -12,7 +12,7 @@ A minimal CheatEngine implementation built with Rust and a terminal UI.
 
 Great for CTF challenges! Search for strings by prefix and read larger memory regions:
 
-[![CTF Demo](assets/demo-ctf.gif)](https://asciinema.org/a/qWf3TNE1lQAyB1ey9s73WVuAt)
+[![CTF Demo](assets/demo-ctf.gif)](https://asciinema.org/a/8AdcT2B2RMp29QwtRtmMXM6ra)
 
 ## What is this?
 
