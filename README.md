@@ -43,7 +43,7 @@ This is a simple memory scanner that lets you find and change values in running 
 
 1. Clone this repo:
 ```bash
-git clone https://github.com/yourusername/cheat-engine-rs.git
+git clone https://github.com/var77/cheat-engine-rs.git
 cd cheat-engine-rs
 ```
 
